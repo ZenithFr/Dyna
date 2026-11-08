@@ -857,6 +857,25 @@ private fun CalibrationPanel(
         }
 
         HorizontalDivider(color = NothingHairline, thickness = 1.dp)
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            CalibrationSlider(
+                label = "Idle contraction delay",
+                value = settings.idleContractDelaySec,
+                range = IslandSettings.IDLE_CONTRACT_DELAY_RANGE,
+                unit = "s",
+                onValueChange = { value ->
+                    onSettingsChange { it.copy(idleContractDelaySec = value) }
+                },
+            )
+            Text(
+                text = "With nothing to show (no notification, music, timer or charging), the " +
+                    "island curls into the camera hole after this delay. New activity brings it back.",
+                style = MaterialTheme.typography.bodySmall,
+                color = NothingMuted,
+                modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+            )
+        }
+        HorizontalDivider(color = NothingHairline, thickness = 1.dp)
         ToggleRow(
             title = "Motion at 120 Hz",
             description = "Expand, retract, activity swaps and incoming text run at the panel's " +

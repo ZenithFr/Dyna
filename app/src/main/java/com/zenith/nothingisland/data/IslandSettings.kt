@@ -60,6 +60,11 @@ data class IslandSettings(
      * island is still.
      */
     val highQualityMotion: Boolean = DEFAULT_HIGH_QUALITY_MOTION,
+    /**
+     * Seconds the island stays visible with nothing to show before it curls into the camera hole.
+     * Any content cancels the countdown.
+     */
+    val idleContractDelaySec: Int = DEFAULT_IDLE_CONTRACT_DELAY_SEC,
 ) {
     /** Keeps every value inside its supported range so the overlay can never be drawn broken. */
     fun coerced(): IslandSettings = copy(
@@ -73,6 +78,7 @@ data class IslandSettings(
         holeCenterYDp = holeCenterYDp.coerceIn(HOLE_Y_RANGE),
         holeRadiusDp = holeRadiusDp.coerceIn(HOLE_RADIUS_RANGE),
         holeRatioPercent = holeRatioPercent.coerceIn(HOLE_RATIO_RANGE),
+        idleContractDelaySec = idleContractDelaySec.coerceIn(IDLE_CONTRACT_DELAY_RANGE),
     )
 
     companion object {
@@ -86,6 +92,7 @@ data class IslandSettings(
         val HOLE_Y_RANGE = 0..60
         val HOLE_RADIUS_RANGE = 4..20
         val HOLE_RATIO_RANGE = 20..80
+        val IDLE_CONTRACT_DELAY_RANGE = 1..10
         /** The UI only exposes the small side, so the useful range is 20..50. */
         val HOLE_RATIO_UI_RANGE = 20..50
 
@@ -111,6 +118,7 @@ data class IslandSettings(
         const val DEFAULT_SHOW_HOLE_GUIDE = false
         val DEFAULT_ISLAND_SHAPE = IslandShape.PILL
         const val DEFAULT_HIGH_QUALITY_MOTION = true
+        const val DEFAULT_IDLE_CONTRACT_DELAY_SEC = 1
     }
 }
 
@@ -156,6 +164,7 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.showHoleGuide] = next.showHoleGuide
             preferences[Keys.islandShape] = next.islandShape.name
             preferences[Keys.highQualityMotion] = next.highQualityMotion
+            preferences[Keys.idleContractDelay] = next.idleContractDelaySec
         }
     }
 
@@ -201,6 +210,9 @@ class IslandSettingsRepository private constructor(private val context: Context)
     suspend fun setHighQualityMotion(enabled: Boolean) =
         update { it.copy(highQualityMotion = enabled) }
 
+    suspend fun setIdleContractDelaySec(value: Int) =
+        update { it.copy(idleContractDelaySec = value) }
+
     suspend fun resetToDefaults() = update { IslandSettings() }
 
     companion object {
@@ -235,6 +247,7 @@ private object Keys {
     val showHoleGuide = booleanPreferencesKey("show_hole_guide")
     val islandShape = stringPreferencesKey("island_shape")
     val highQualityMotion = booleanPreferencesKey("motion_120hz")
+    val idleContractDelay = intPreferencesKey("idle_contract_delay_sec")
 }
 
 private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
@@ -258,6 +271,8 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     showHoleGuide = this[Keys.showHoleGuide] ?: IslandSettings.DEFAULT_SHOW_HOLE_GUIDE,
     islandShape = this[Keys.islandShape].enumOrDefault(IslandSettings.DEFAULT_ISLAND_SHAPE),
     highQualityMotion = this[Keys.highQualityMotion] ?: IslandSettings.DEFAULT_HIGH_QUALITY_MOTION,
+    idleContractDelaySec = this[Keys.idleContractDelay]
+        ?: IslandSettings.DEFAULT_IDLE_CONTRACT_DELAY_SEC,
 ).coerced()
 
 /** Unknown/renamed enum names fall back instead of throwing, so old data always loads. */

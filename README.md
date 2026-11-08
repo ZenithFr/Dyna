@@ -46,6 +46,12 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   always leads the content, and switching activities (timer → notification) crossfades instead of
   hard-cutting. Hit targets only exist at rest. Motion asks the panel for **120 Hz** while it runs
   and drops the request to 0 when the island is still.
+- **Idle contraction**: with nothing to show — no notification, media, timer or charging — the
+  shell curls up into the camera-hole circle after a **1 s** delay (configurable 1–10 s in the
+  calibration panel). Pausing a track or letting an alert expire hands the island back to idle, so
+  it disappears into the lens instead of lingering; new activity cancels the countdown and springs
+  the shell back out. The curl is a ~420 ms spring on the same 120 Hz motion path as the expand /
+  retract morph (measured 8.3 ms per frame on device), not a one-frame pop.
 - **Portrait lock** (default on): geometry is always computed from the portrait display width,
   so landscape games/video never resize, rotate or move the island. The app itself is locked to
   portrait. Turn the switch off for rotation-aware behaviour.
@@ -192,6 +198,7 @@ clamped to safe ranges:
 | Hole side (one-side mode) | Left / Right | Left |
 | Guide on screen | on/off | off |
 | Island shape | Pill / Notch | Pill |
+| Idle contraction delay | 1 … 10 s | 1 s |
 
 ## Test
 
@@ -231,6 +238,11 @@ adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the 
 
 # 7. Portrait lock: rotate into a landscape game/video. The pill must keep its size and
 #    top-centre anchor (no jump, no rotation), and must not re-anchor to the cutout.
+
+# 8. Idle contraction: pause the music / let the alert expire so the island has nothing to show.
+#    After the configured delay (1s by default) the shell curls into the camera hole. A new
+#    notification or resuming music must spring it straight back out. Check the log:
+#    adb logcat -s IslandOverlay   # "apply content=null" then the contraction
 
 # Logs
 adb logcat -s IslandOverlay IslandService IslandMedia IslandNotifications IslandCharging IslandReply IslandHole

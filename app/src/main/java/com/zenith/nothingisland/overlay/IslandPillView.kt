@@ -136,8 +136,6 @@ internal class IslandPillView(context: Context) : View(context) {
     private var dormantVelocity = 0f
     private var dormantTarget = 0f
     private var dormantSettling = false
-    /** True once the shell has been told to curl into the camera hole (mid-flight or settled). */
-    fun isDormant(): Boolean = dormantTarget > 0.5f
     private val dormantBounds = RectF()
     private var dormantCornerPx = 1f
 
@@ -1546,9 +1544,13 @@ internal class IslandPillView(context: Context) : View(context) {
         const val HEIGHT_OMEGA = 17f
         const val HEIGHT_ZETA = 0.9f
 
-        /** Curling into / out of the camera hole: a touch softer than the expand springs. */
-        const val DORMANT_OMEGA = 21f
-        const val DORMANT_ZETA = 0.92f
+        /**
+         * Curling into / out of the camera hole. Slower than the expand springs on purpose: the
+         * shell travels a much shorter distance and a ~420 ms glide gives the 120 Hz panel enough
+         * frames (~50) to read the motion instead of a one-frame pop into the lens.
+         */
+        const val DORMANT_OMEGA = 16f
+        const val DORMANT_ZETA = 0.9f
 
         /** Always-on display outline: at most 1 dp and never more than 2 physical px. */
         const val AOD_STROKE_PX = 2f
