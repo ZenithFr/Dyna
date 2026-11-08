@@ -91,7 +91,9 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
 - **Display behaviour**: **Hide in landscape** and **Hide in fullscreen** default on. Suppression
   removes the island, touch shield and inline reply (the invisible 1 px inset probe remains), and stops overlay frame work; sources keep
   running and the current activity snaps back when allowed. Fullscreen is detected from status-bar
-  inset visibility through a 1 px non-touchable probe, not window content. **Portrait lock** only
+  inset visibility through a 1 px non-touchable probe, not window content. The probe fails open:
+  until it has observed a visible status bar, a hidden reading is treated as unknown and cannot hide
+  the island. **Portrait lock** only
   applies when landscape hiding is off: it keeps the portrait size/top-centre anchor instead of
   re-anchoring to the rotated cutout. The settings app itself remains portrait.
 - **Customization**: every source can be switched off; alert holds, battery threshold, lockscreen
@@ -311,6 +313,7 @@ adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the 
 #    the island, touch window and reply window must disappear; returning to portrait/non-fullscreen
 #    restores the current activity. Turn Hide in landscape off to verify portrait lock instead.
 #    adb shell dumpsys window windows | grep -E 'NothingIsland|NothingIslandTouch|NothingIslandReply' | grep -v Visibility
+#    adb logcat -s IslandOverlay IslandVisibility   # suppression transitions + probe calibration
 
 # 8. Idle contraction: pause the music / let the alert expire so the island has nothing to show.
 #    After the configured delay (1s by default) the shell curls into the camera hole. A new
@@ -323,7 +326,7 @@ adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the 
 #    Check long titles, RTL/emoji titles, font scale 1.3, and a low/large calibrated lens.
 
 # Logs
-adb logcat -s IslandOverlay IslandService IslandMedia IslandNotifications IslandCharging IslandReply IslandHole
+adb logcat -s IslandOverlay IslandVisibility IslandService IslandMedia IslandNotifications IslandCharging IslandReply IslandHole
 ```
 
 ## Project layout

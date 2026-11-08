@@ -237,7 +237,7 @@ internal fun DisplayBehaviorPanel(settings: IslandSettings, onSettingsChange: Se
         ) { onSettingsChange { s -> s.copy(hideInLandscape = it) } }
         ToggleRow(
             "Hide in fullscreen",
-            "Hide while the status bar is hidden (immersive video/games). Transient system-bar swipes bring it back. Reads only inset visibility, not screen content.",
+            "Hide while the status bar is hidden (immersive video/games). Fails open until the inset probe has seen a visible status bar. Reads only inset visibility, not screen content.",
             settings.hideInFullscreen,
         ) { onSettingsChange { s -> s.copy(hideInFullscreen = it) } }
         ToggleRow(
