@@ -172,9 +172,10 @@ class IslandOverlay(private val serviceContext: Context) {
         val compact = footprint(expanded = false)
         val expandedFrame = footprint(expanded = true)
         val dormant = dormantFootprint()
+        val satellite = satelliteFootprint(compact)
         // One fixed window for both states, added once: expanding and retracting only ever move
         // rectangles inside it, so no frame is ever composited into a differently sized surface.
-        val window = envelopeOf(compact, expandedFrame, dormant)
+        val window = envelopeOf(compact, expandedFrame, dormant, satellite)
         val existing = layoutParams
         if (existing == null) {
             val params = buildLayoutParams(window, touchable = false)
@@ -207,6 +208,7 @@ class IslandOverlay(private val serviceContext: Context) {
             compactFrame = rectIn(compact, window),
             expandedFrame = rectIn(expandedFrame, window),
             dormantFrame = rectIn(dormant, window),
+            satelliteFrame = rectIn(satellite, window),
             compactCornerPx = dp(compact.cornerRadiusDp).toFloat(),
             expandedCornerPx = dp(expandedFrame.cornerRadiusDp).toFloat(),
         )
@@ -241,11 +243,28 @@ class IslandOverlay(private val serviceContext: Context) {
             guideVisible = settings.showHoleGuide && settings.holeEnabled,
         )
 
-        updateTouchWindow(compact, expandedFrame)
+        updateTouchWindow(compact, expandedFrame, satellite)
         if (accessibilityRevision != pill.accessibilityRevision) {
             accessibilityRevision = pill.accessibilityRevision
             if (touchParams != null) touchShield.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
         }
+    }
+
+    /**
+     * The detached app-icon bubble of a persistent live activity: a shell-height squircle a gap to
+     * the right of the compact pill. It is reserved in the window unconditionally, so an activity
+     * starting or ending never resizes the surface (a resize would flash a stretched frame); the
+     * renderer decides whether anything is actually drawn there.
+     */
+    private fun satelliteFootprint(compact: Footprint): Envelope {
+        val size = compact.heightPx
+        val gap = dp(settings.satelliteGapDp.toFloat())
+        val portraitWidth = portraitWidthPx()
+        // Never let it hang off the panel: with a wide / edge-anchored pill the bubble slides left
+        // instead of being clipped by the display edge.
+        val x = (compact.x + compact.widthPx + gap)
+            .coerceAtMost((portraitWidth - size - dp(SATELLITE_MARGIN_DP)).coerceAtLeast(0))
+        return Envelope(widthPx = size, heightPx = size, x = x, y = compact.y)
     }
 
     /**
@@ -303,7 +322,11 @@ class IslandOverlay(private val serviceContext: Context) {
      * while the springs run (so a moving edge never hands back a half-tap), the settled frame
      * otherwise. The envelope itself stays untouchable, which is what keeps the status bar alive.
      */
-    private fun updateTouchWindow(compact: Footprint, expandedFrame: Footprint) {
+    private fun updateTouchWindow(
+        compact: Footprint,
+        expandedFrame: Footprint,
+        satellite: Envelope,
+    ) {
         if (layoutParams == null) return
         // Fully idle: the shell is curled up behind the lens and has nothing to tap, so drop the
         // input window entirely instead of leaving a dead rectangle at the top of the screen.
@@ -315,16 +338,12 @@ class IslandOverlay(private val serviceContext: Context) {
             return
         }
         val rect = if (pill.isMorphing()) {
-            val left = min(compact.x, expandedFrame.x)
-            val top = min(compact.y, expandedFrame.y)
-            Envelope(
-                widthPx = max(compact.x + compact.widthPx, expandedFrame.x + expandedFrame.widthPx) - left,
-                heightPx = max(compact.y + compact.heightPx, expandedFrame.y + expandedFrame.heightPx) - top,
-                x = left,
-                y = top,
-            )
+            union(union(compact.window(), expandedFrame.window()), satellite)
         } else if (event?.expanded == true) {
             expandedFrame.window()
+        } else if (pill.hasSatellite()) {
+            // The detached bubble is tappable as part of the island, not a dead hole beside it.
+            union(compact.window(), satellite)
         } else {
             compact.window()
         }
@@ -368,7 +387,12 @@ class IslandOverlay(private val serviceContext: Context) {
      * A window big enough for the compact pill, the expanded view, and the springs' overshoot.
      * It is installed once and never resized by a morph: only settings or a display change move it.
      */
-    private fun envelopeOf(compact: Footprint, expanded: Footprint, dormant: Envelope): Envelope {
+    private fun envelopeOf(
+        compact: Footprint,
+        expanded: Footprint,
+        dormant: Envelope,
+        satellite: Envelope,
+    ): Envelope {
         // Pad both axes by the overshoot the springs can actually produce, so a wide pill cannot
         // be clipped by a fixed pad that was sized for a small one.
         val padX = dp(ENVELOPE_PAD_DP + abs(expanded.widthPx - compact.widthPx) * SPRING_OVERSHOOT_DP)
@@ -376,15 +400,27 @@ class IslandOverlay(private val serviceContext: Context) {
         val portraitWidth = portraitWidthPx()
         // The dormant circle can sit above (or beside) the pill, so it is part of the union too:
         // the window is installed once and never resized by a morph.
-        val left = (min(compact.x, min(expanded.x, dormant.x)) - padX).coerceAtLeast(0)
-        val top = (min(compact.y, min(expanded.y, dormant.y)) - padY).coerceAtLeast(0)
+        val left = (
+            min(compact.x, min(expanded.x, min(dormant.x, satellite.x))) - padX
+            ).coerceAtLeast(0)
+        val top = (
+            min(compact.y, min(expanded.y, min(dormant.y, satellite.y))) - padY
+            ).coerceAtLeast(0)
         val right = (
-            max(compact.x + compact.widthPx, max(expanded.x + expanded.widthPx, dormant.x + dormant.widthPx)) +
-                padX
+            max(
+                compact.x + compact.widthPx,
+                max(
+                    expanded.x + expanded.widthPx,
+                    max(dormant.x + dormant.widthPx, satellite.x + satellite.widthPx),
+                ),
+            ) + padX
             ).coerceAtMost(portraitWidth)
         val bottom = max(
             compact.y + compact.heightPx,
-            max(expanded.y + expanded.heightPx, dormant.y + dormant.heightPx),
+            max(
+                expanded.y + expanded.heightPx,
+                max(dormant.y + dormant.heightPx, satellite.y + satellite.heightPx),
+            ),
         ) + padY
         return Envelope(
             widthPx = (right - left).coerceAtLeast(1),
@@ -397,6 +433,18 @@ class IslandOverlay(private val serviceContext: Context) {
     /** Settled window: exactly the shell, so only the island is touchable. */
     private fun Footprint.window(): Envelope =
         Envelope(widthPx = widthPx, heightPx = heightPx, x = x, y = y)
+
+    /** Smallest rectangle covering both inputs; used to keep one input window over a split island. */
+    private fun union(first: Envelope, second: Envelope): Envelope {
+        val left = min(first.x, second.x)
+        val top = min(first.y, second.y)
+        return Envelope(
+            widthPx = max(first.x + first.widthPx, second.x + second.widthPx) - left,
+            heightPx = max(first.y + first.heightPx, second.y + second.heightPx) - top,
+            x = left,
+            y = top,
+        )
+    }
 
     private fun rectIn(footprint: Footprint, window: Envelope): RectF = RectF(
         (footprint.x - window.x).toFloat(),
@@ -650,6 +698,9 @@ class IslandOverlay(private val serviceContext: Context) {
 
     private companion object {
         const val TAG = "IslandOverlay"
+
+        /** Detached app-icon bubble: minimum screen-edge margin (the gap is user-configurable). */
+        const val SATELLITE_MARGIN_DP = 2f
 
         /** Slack around both states so the spring overshoot is never clipped by the window. */
         const val ENVELOPE_PAD_DP = 4f

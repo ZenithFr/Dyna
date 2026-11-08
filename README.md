@@ -49,6 +49,14 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   derived from `SystemClock.elapsedRealtime`, so ticks never drift; a finished timer shows
   `TIME'S UP` / `00:00` for 4 s before clearing. Notifications and charging still layer above it
   and hand it back when they expire.
+- **Detached app icon**: a persistent live activity — music, timer, maps or downloads — keeps the
+  island compact and moves the owning app's icon into its own shell-height bubble a gap to the
+  right, the way the system island separates an app from its activity. The bubble is part of the
+  island for touches (tapping it does what tapping the shell does), it grows in and retracts with
+  the compact shell, and its surface space is reserved so an activity starting or ending never
+  resizes the window. Notification, charging and battery alerts never split: they keep the single
+  shell. The bubble can be switched off and its gap adjusted in **Expanded card & colours**; its
+  offscreen layer is bounded to the bubble, and TalkBack announces the shared shell action once.
 - **Camera hole**: the overlay knows where the physical punch-hole is (defaults: screen centre,
   26 dp down, 8 dp radius). Compact content is split into leading/trailing areas beside it — media
   art left / bars right, notification icon left / title right, timer glyph left / time right,

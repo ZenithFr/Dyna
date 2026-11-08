@@ -164,7 +164,15 @@ internal fun ExpandedAppearancePanel(settings: IslandSettings, onSettingsChange:
             CalibrationSlider("Island text scale", settings.islandTextScalePercent, IslandSettings.ISLAND_TEXT_SCALE_RANGE, unit = "%") {
                 onSettingsChange { s -> s.copy(islandTextScalePercent = it) }
             }
+            CalibrationSlider("App-icon bubble gap", settings.satelliteGapDp, IslandSettings.SATELLITE_GAP_RANGE) {
+                onSettingsChange { s -> s.copy(satelliteGapDp = it) }
+            }
         }
+        ToggleRow(
+            "Detached app icon",
+            "Music, timers, maps and downloads put the owning app's icon in its own bubble beside the compact island. Alerts never split.",
+            settings.detachedAppIcon,
+        ) { onSettingsChange { s -> s.copy(detachedAppIcon = it) } }
         AccentColorRow("Timer", settings.timerColorArgb, IslandSettings.DEFAULT_TIMER_COLOR_ARGB) { onSettingsChange { s -> s.copy(timerColorArgb = it) } }
         AccentColorRow("Charging", settings.chargingColorArgb, IslandSettings.DEFAULT_CHARGING_COLOR_ARGB) { onSettingsChange { s -> s.copy(chargingColorArgb = it) } }
         AccentColorRow("Battery low", settings.batteryLowColorArgb, IslandSettings.DEFAULT_BATTERY_LOW_COLOR_ARGB) { onSettingsChange { s -> s.copy(batteryLowColorArgb = it) } }

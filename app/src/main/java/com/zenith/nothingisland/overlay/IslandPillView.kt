@@ -131,6 +131,18 @@ internal class IslandPillView(context: Context) : View(context) {
     private var framesReady = false
 
     /**
+     * Detached app-icon bubble that sits to the right of the compact shell while a persistent
+     * live activity (music, timer) is running — the app is separated from its activity, the way
+     * the system island does it. Notification alerts never split.
+     */
+    private val satelliteBounds = RectF()
+    private val satellitePath = Path()
+    private var satelliteCornerPx = 0f
+    private var satelliteShown = false
+    private var ownAppIcon: Drawable? = null
+    private var ownAppIconLoaded = false
+
+    /**
      * Two coupled springs on the same 0..1 morph: the width leads and the height follows about
      * 80 ms behind. That lag is what gives the shell the system island's liquid read — it stretches
      * sideways first, then settles into the taller expanded card (and squishes the other way when
@@ -221,18 +233,23 @@ internal class IslandPillView(context: Context) : View(context) {
         compactFrame: RectF,
         expandedFrame: RectF,
         dormantFrame: RectF,
+        satelliteFrame: RectF,
         compactCornerPx: Float,
         expandedCornerPx: Float,
     ) {
         if (framesReady && compactBounds == compactFrame && expandedBounds == expandedFrame &&
-            dormantBounds == dormantFrame && this.compactCornerPx == compactCornerPx &&
-            this.expandedCornerPx == expandedCornerPx
+            dormantBounds == dormantFrame && satelliteBounds == satelliteFrame &&
+            this.compactCornerPx == compactCornerPx && this.expandedCornerPx == expandedCornerPx
         ) {
             return
         }
         compactBounds.set(compactFrame)
         expandedBounds.set(expandedFrame)
         dormantBounds.set(dormantFrame)
+        satelliteBounds.set(satelliteFrame)
+        satelliteCornerPx = (
+            satelliteFrame.height() * SATELLITE_CORNER_FRACTION
+            ).coerceIn(0f, satelliteFrame.height() / 2f)
         dormantCornerPx = dormantFrame.height() / 2f
         this.compactCornerPx = compactCornerPx
         this.expandedCornerPx = expandedCornerPx
@@ -403,6 +420,9 @@ internal class IslandPillView(context: Context) : View(context) {
         expanded = newExpanded
         animating = motionAllowed && (newContent as? IslandContent.Media)?.isPlaying == true
         progressAnimating = motionAllowed && (newContent as? IslandContent.Download)?.indeterminate == true
+        // Only persistent live activities detach their app into the bubble; a notification alert
+        // (or a transient battery/charging confirmation) keeps the single shell.
+        satelliteShown = !newExpanded && satelliteIcon(newContent) != null
 
         val target = if (newExpanded) 1f else 0f
         if (!motionAllowed) {
@@ -467,11 +487,9 @@ internal class IslandPillView(context: Context) : View(context) {
             dormantCornerPx,
             widthCage,
         )
-
         // Contracted to a circle behind the lens it must be a circle whatever the shape setting is.
         val shellShape = if (widthCage > 0.35f) IslandShape.PILL else shape
         drawShell(canvas, frame, corner, shellShape)
-        targets.clear()
 
         // Staged content, the way the system island hands over between presentations: the shell
         // always leads, the card's content follows it in with a fade, a 6% scale-up and a few dp
@@ -490,10 +508,21 @@ internal class IslandPillView(context: Context) : View(context) {
         }
 
         val current = content
-        canvas.save()
-        canvas.clipPath(shellPath)
         val outgoing = previousContent
         val swapping = outgoing != null && swapAnimating && swapT < 1f
+
+        // The detached app-icon bubble belongs to the compact presentation: it arrives with the
+        // shell and retracts as the card grows. During an activity swap the outgoing icon fades
+        // into the incoming one instead of popping out of the bubble.
+        val satelliteOut = compactOut * (1f - widthCage)
+        if (satelliteOut > 0.004f) {
+            if (swapping) drawSatellite(canvas, outgoing, satelliteOut * (1f - swapT))
+            drawSatellite(canvas, current, satelliteOut * (if (swapping) swapT else 1f))
+        }
+        targets.clear()
+
+        canvas.save()
+        canvas.clipPath(shellPath)
         // Content fades out with the narrowing (not with the flattening), so nothing is left as a
         // hard-clipped sliver inside an already thin shell.
         if (swapping) {
@@ -521,6 +550,11 @@ internal class IslandPillView(context: Context) : View(context) {
             // Whole-pill fallback target. Charging is a non-interactive confirmation.
             val body = currentFrame()
             targets.add(0, Target(TargetKind.Body, -1, body))
+            // The detached bubble is part of the island: tapping it must do what tapping the
+            // shell does, never nothing.
+            if (satelliteShown && satelliteOut > 0.05f) {
+                targets.add(0, Target(TargetKind.Body, -1, RectF(satelliteBounds)))
+            }
         }
 
         val revealRunning = revealAnimating &&
@@ -653,7 +687,13 @@ internal class IslandPillView(context: Context) : View(context) {
         }
     }
 
-    private fun drawShell(canvas: Canvas, frame: RectF, cornerPx: Float, shellShape: IslandShape) {
+    private fun drawShell(
+        canvas: Canvas,
+        frame: RectF,
+        cornerPx: Float,
+        shellShape: IslandShape,
+        path: Path = shellPath,
+    ) {
         // On the always-on display the island is a black shape on a black screen, so only an
         // outline can be seen — and it is forced to a hairline (~2 px) instead of the user width.
         val strokePx = if (aod) min(AOD_STROKE_PX, density) else strokeWidthPx
@@ -663,15 +703,79 @@ internal class IslandPillView(context: Context) : View(context) {
         val half = if (strokeOn) strokePx / 2f else 0f
         val innerWidth = (frame.width() - half * 2f).coerceAtLeast(1f)
         val innerHeight = (frame.height() - half * 2f).coerceAtLeast(1f)
-        buildIslandPath(shellPath, shellShape, innerWidth, innerHeight, cornerPx)
-        shellPath.offset(frame.left + half, frame.top + half)
-        canvas.drawPath(shellPath, shellPaint)
+        buildIslandPath(path, shellShape, innerWidth, innerHeight, cornerPx)
+        path.offset(frame.left + half, frame.top + half)
+        canvas.drawPath(path, shellPaint)
         if (strokeOn) {
             strokePaint.strokeWidth = strokePx
             strokePaint.color = strokeColorArgb
-            canvas.drawPath(shellPath, strokePaint)
+            canvas.drawPath(path, strokePaint)
         }
     }
+
+    /**
+     * The detached bubble: same shell treatment and outline as the island, with the owning app's
+     * launcher icon inset inside it. [alpha] rides the compact presentation, so the bubble grows in
+     * and retracts with the shell instead of blinking on and off.
+     */
+    private fun drawSatellite(canvas: Canvas, value: IslandContent?, alpha: Float) {
+        if (alpha <= 0.004f) return
+        val icon = satelliteIcon(value) ?: return
+        val rect = satelliteBounds
+        if (rect.width() <= 0f || rect.height() <= 0f) return
+
+        val save = canvas.save()
+        if (alpha < 0.995f) {
+            canvas.saveLayerAlpha(
+                rect.left, rect.top, rect.right, rect.bottom,
+                (alpha * 255f).toInt().coerceIn(0, 255),
+            )
+        }
+        // A slight grow-in keeps the arrival soft without a second spring to keep in sync.
+        val scale = 0.9f + 0.1f * alpha
+        canvas.scale(scale, scale, rect.centerX(), rect.centerY())
+        drawShell(canvas, rect, satelliteCornerPx, IslandShape.PILL, path = satellitePath)
+
+        val pad = dp(SATELLITE_ICON_PAD_DP)
+        val iconRect = RectF(rect)
+        iconRect.inset(pad, pad)
+        canvas.save()
+        canvas.clipPath(satellitePath)
+        drawIcon(canvas, icon, iconRect)
+        canvas.restore()
+        canvas.restoreToCount(save)
+    }
+
+    /**
+     * Launcher icon of a *persistent* live activity: the playing app for music, our own icon for
+     * the built-in timer, the owning app for maps and downloads. Notifications and the transient
+     * charging/battery confirmations return null, so they never split the shell. Returning null
+     * here also disables the bubble's hit target, so drawing and touch can never disagree.
+     */
+    private fun satelliteIcon(value: IslandContent?): Drawable? {
+        if (!customization.detachedAppIcon) return null
+        return when (value) {
+            is IslandContent.Media -> value.appIcon
+            is IslandContent.Timer -> timerAppIcon()
+            is IslandContent.Navigation -> value.icon
+            is IslandContent.Download -> value.icon
+            else -> null
+        }
+    }
+
+    /** The island's own launcher icon, loaded once. */
+    private fun timerAppIcon(): Drawable? {
+        if (!ownAppIconLoaded) {
+            ownAppIconLoaded = true
+            ownAppIcon = runCatching {
+                context.applicationInfo.loadIcon(context.packageManager)
+            }.getOrNull()
+        }
+        return ownAppIcon
+    }
+
+    /** True while the detached app-icon bubble is part of the current compact presentation. */
+    fun hasSatellite(): Boolean = satelliteShown
 
     /** Single centred area, or left/right around the hole. */
     private class Areas(val left: RectF?, val right: RectF?, val single: RectF) {
@@ -1740,7 +1844,15 @@ internal class IslandPillView(context: Context) : View(context) {
     /** Stable-at-rest virtual controls for the input window's accessibility provider. */
     internal fun accessibilityTargets(): List<IslandAccessibleTarget> {
         if (isMorphing() || content == null) return emptyList()
-        return targets.map { target -> IslandAccessibleTarget(accessibilityLabel(target), RectF(target.rect)) }
+        // The detached bubble shares the shell's Body action; expose it once, not twice.
+        var bodySeen = false
+        return targets.mapNotNull { target ->
+            if (target.kind == TargetKind.Body) {
+                if (bodySeen) return@mapNotNull null
+                bodySeen = true
+            }
+            IslandAccessibleTarget(accessibilityLabel(target), RectF(target.rect))
+        }
     }
 
     internal fun activateAccessibilityTarget(index: Int): Boolean {
@@ -1827,6 +1939,13 @@ internal class IslandPillView(context: Context) : View(context) {
     private fun lerp(from: Float, to: Float, t: Float): Float = from + (to - from) * t
 
     private companion object {
+        /**
+         * Detached app-icon bubble: squircle corner as a fraction of its height (0.34 keeps it a
+         * rounded square rather than a circle) and the icon inset inside the shell.
+         */
+        const val SATELLITE_CORNER_FRACTION = 0.34f
+        const val SATELLITE_ICON_PAD_DP = 5f
+
         /** Always-on display outline: at most 1 dp and never more than 2 physical px. */
         const val AOD_STROKE_PX = 2f
 

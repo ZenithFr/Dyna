@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.os.Handler
@@ -42,6 +43,10 @@ class MediaSource(private val context: Context) {
     private var artSource: Bitmap? = null
     private var artScaled: Bitmap? = null
     private var artAccent = IslandContent.DEFAULT_ACCENT_COLOR
+
+    /** Last package whose launcher icon was resolved; icon loading is not free. */
+    private var iconPackage: String? = null
+    private var iconDrawable: Drawable? = null
 
     private val activeSessionsListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
@@ -235,8 +240,23 @@ class MediaSource(private val context: Context) {
                 canPlayPause = (actions and (PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE)) != 0L,
                 canSeekNext = (actions and PlaybackStateCompat.ACTION_SKIP_TO_NEXT) != 0L,
                 accentColor = artAccent,
+                appIcon = appIcon(session.packageName),
             ),
         )
+    }
+
+    /**
+     * Launcher icon of the playing app, cached per package: it only changes when another app takes
+     * over the session, so a metadata update must not hit the PackageManager every time.
+     */
+    private fun appIcon(packageName: String?): Drawable? {
+        val name = packageName?.takeIf { it.isNotBlank() } ?: return null
+        if (name == iconPackage) return iconDrawable
+        iconPackage = name
+        iconDrawable = runCatching { context.packageManager.getApplicationIcon(name) }
+            .onFailure { Log.w(TAG, "No launcher icon for $name", it) }
+            .getOrNull()
+        return iconDrawable
     }
 
     private fun albumArt(metadata: MediaMetadataCompat): Bitmap? {

@@ -70,6 +70,9 @@ data class IslandSettings(
     val contentMarginDp: Int = DEFAULT_CONTENT_MARGIN_DP,
     val sensorClearanceDp: Int = DEFAULT_SENSOR_CLEARANCE_DP,
     val islandTextScalePercent: Int = DEFAULT_ISLAND_TEXT_SCALE_PERCENT,
+    /** Persistent live activities detach their owning app icon into a bubble beside the shell. */
+    val detachedAppIcon: Boolean = true,
+    val satelliteGapDp: Int = DEFAULT_SATELLITE_GAP_DP,
 
     // Motion / performance. Morphs use the panel's high-rate hint; ambient loops can run slower.
     val ambientFrameRateHz: Int = DEFAULT_AMBIENT_FRAME_RATE_HZ,
@@ -109,6 +112,7 @@ data class IslandSettings(
         contentMarginDp = contentMarginDp.coerceIn(CONTENT_MARGIN_RANGE),
         sensorClearanceDp = sensorClearanceDp.coerceIn(SENSOR_CLEARANCE_RANGE),
         islandTextScalePercent = islandTextScalePercent.coerceIn(ISLAND_TEXT_SCALE_RANGE),
+        satelliteGapDp = satelliteGapDp.coerceIn(SATELLITE_GAP_RANGE),
         ambientFrameRateHz = ambientFrameRateHz.coerceIn(AMBIENT_FRAME_RATE_RANGE),
         motionScalePercent = motionScalePercent.coerceIn(MOTION_SCALE_RANGE),
         disabledPackages = disabledPackages.toSet(),
@@ -134,6 +138,7 @@ data class IslandSettings(
         val CONTENT_MARGIN_RANGE = 8..20
         val SENSOR_CLEARANCE_RANGE = 2..8
         val ISLAND_TEXT_SCALE_RANGE = 90..130
+        val SATELLITE_GAP_RANGE = 4..20
         val AMBIENT_FRAME_RATE_RANGE = 30..120
         val MOTION_SCALE_RANGE = 50..150
 
@@ -167,6 +172,7 @@ data class IslandSettings(
         const val DEFAULT_CONTENT_MARGIN_DP = 12
         const val DEFAULT_SENSOR_CLEARANCE_DP = 4
         const val DEFAULT_ISLAND_TEXT_SCALE_PERCENT = 100
+        const val DEFAULT_SATELLITE_GAP_DP = 8
         const val DEFAULT_AMBIENT_FRAME_RATE_HZ = 60
         const val DEFAULT_MOTION_SCALE_PERCENT = 100
         const val DEFAULT_TIMER_COLOR_ARGB = 0xFFFF9F0A.toInt()
@@ -238,6 +244,8 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.contentMargin] = next.contentMarginDp
             preferences[Keys.sensorClearance] = next.sensorClearanceDp
             preferences[Keys.islandTextScale] = next.islandTextScalePercent
+            preferences[Keys.detachedAppIcon] = next.detachedAppIcon
+            preferences[Keys.satelliteGap] = next.satelliteGapDp
             preferences[Keys.ambientFrameRate] = next.ambientFrameRateHz
             preferences[Keys.motionScale] = next.motionScalePercent
             preferences[Keys.timerColor] = next.timerColorArgb
@@ -327,6 +335,8 @@ private object Keys {
     val contentMargin = intPreferencesKey("content_margin_dp")
     val sensorClearance = intPreferencesKey("sensor_clearance_dp")
     val islandTextScale = intPreferencesKey("island_text_scale_percent")
+    val detachedAppIcon = booleanPreferencesKey("detached_app_icon")
+    val satelliteGap = intPreferencesKey("satellite_gap_dp")
     val ambientFrameRate = intPreferencesKey("ambient_frame_rate_hz")
     val motionScale = intPreferencesKey("motion_scale_percent")
     val timerColor = intPreferencesKey("timer_color_argb")
@@ -381,6 +391,8 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     contentMarginDp = this[Keys.contentMargin] ?: IslandSettings.DEFAULT_CONTENT_MARGIN_DP,
     sensorClearanceDp = this[Keys.sensorClearance] ?: IslandSettings.DEFAULT_SENSOR_CLEARANCE_DP,
     islandTextScalePercent = this[Keys.islandTextScale] ?: IslandSettings.DEFAULT_ISLAND_TEXT_SCALE_PERCENT,
+    detachedAppIcon = this[Keys.detachedAppIcon] ?: true,
+    satelliteGapDp = this[Keys.satelliteGap] ?: IslandSettings.DEFAULT_SATELLITE_GAP_DP,
     ambientFrameRateHz = this[Keys.ambientFrameRate] ?: IslandSettings.DEFAULT_AMBIENT_FRAME_RATE_HZ,
     motionScalePercent = this[Keys.motionScale] ?: IslandSettings.DEFAULT_MOTION_SCALE_PERCENT,
     timerColorArgb = this[Keys.timerColor] ?: IslandSettings.DEFAULT_TIMER_COLOR_ARGB,

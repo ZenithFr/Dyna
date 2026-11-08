@@ -46,6 +46,12 @@ sealed interface IslandContent {
         val canSeekNext: Boolean = true,
         /** Tint sampled once from the artwork, used by the waveform like Apple's Now Playing pill. */
         val accentColor: Int = IslandContent.DEFAULT_ACCENT_COLOR,
+        /**
+         * Launcher icon of the app that owns the session. A persistent live activity keeps the
+         * shell compact and puts this icon in the detached bubble beside it, the way the system
+         * island separates an app from its activity.
+         */
+        val appIcon: Drawable? = null,
     ) : IslandContent {
 
         /** Playback position extrapolated from the last callback, without polling the session. */

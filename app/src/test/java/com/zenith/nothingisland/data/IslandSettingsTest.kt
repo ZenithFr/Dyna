@@ -1,6 +1,7 @@
 package com.zenith.nothingisland.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IslandSettingsTest {
@@ -11,6 +12,19 @@ class IslandSettingsTest {
         assertEquals(IslandSettings.HEIGHT_RANGE.first, settings.heightDp)
         assertEquals(IslandSettings.HOLE_RADIUS_RANGE.last, settings.holeRadiusDp)
         assertEquals(IslandSettings.IDLE_CONTRACT_DELAY_RANGE.first, settings.idleContractDelaySec)
+    }
+
+    @Test
+    fun detachedBubbleKnobsAreClampedAndDefaultOn() {
+        val defaults = IslandSettings()
+        assertTrue(defaults.detachedAppIcon)
+        assertEquals(IslandSettings.DEFAULT_SATELLITE_GAP_DP, defaults.satelliteGapDp)
+        val settings = IslandSettings(satelliteGapDp = 99).coerced()
+        assertEquals(IslandSettings.SATELLITE_GAP_RANGE.last, settings.satelliteGapDp)
+        assertEquals(
+            IslandSettings.SATELLITE_GAP_RANGE.first,
+            IslandSettings(satelliteGapDp = 0).coerced().satelliteGapDp,
+        )
     }
 
     @Test
