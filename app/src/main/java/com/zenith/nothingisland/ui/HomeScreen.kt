@@ -185,6 +185,19 @@ fun HomeScreen(
             style = MaterialTheme.typography.labelSmall,
             color = NothingMuted,
         )
+        Spacer(Modifier.height(36.dp))
+        SectionLabel("Reset")
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(
+            onClick = { onSettingsChange { IslandSettings() } },
+            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp),
+            shape = CircleShape,
+            border = BorderStroke(1.dp, NothingHairline),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingWhite),
+        ) {
+            Text("RESTORE ISLAND DEFAULTS", style = MaterialTheme.typography.labelMedium)
+        }
+
         Spacer(Modifier.height(24.dp))
     }
 }

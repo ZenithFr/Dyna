@@ -28,7 +28,8 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   group-summary, low-importance, media/call and own-package notifications, and anything while
   Do Not Disturb is set to *none*. If the reply overlay cannot take focus, the conversation's
   content intent is opened instead of sending a result-less reply intent. When the alert expires
-  the island falls back to a running timer, then media, else idle.
+  the island falls back to the persistent base (timer, then maps, then downloads, then media),
+  else idle.
 - **Calls**: `Notification.CallStyle` incoming/ongoing calls surface above everything else, with
   answer/decline/end controls and optional auto-expand. No Shizuku or telecom role is required.
 - **Charging / battery**: plug-in shows a green bolt + `xx%` (`FULL` at 100 %); crossing the
@@ -40,7 +41,8 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
 - **Maps / navigation**: navigation-category notifications and known maps packages become a
   turn-by-turn card with an open-maps action. This is a public-notification integration, not a
   private Google Maps/Waze SDK hook.
-- **Timer**: a persistent countdown that outranks media/call on the base layer. Start 1/5/10/25
+- **Timer**: a persistent countdown that outranks maps/downloads/media on the base layer; calls
+  sit above all alerts. Start 1/5/10/25
   minute presets from the app; the compact pill shows an orange timer/pause glyph + `mm:ss`.
   Tap to expand for circular pause/resume + cancel controls leading and a large orange `mm:ss`
   trailing, below the lens. Time is
@@ -333,7 +335,7 @@ app/src/test/java/com/zenith/nothingisland/ # local layout/motion/state regressi
 ## Roadmap
 
 1. **Fullscreen rule** — honour `hideInFullscreen` without broadening window-content access.
-2. **Call module** — reserve the `Call` priority slot with an ongoing-call state.
+2. **Richer call UI** — missed-call history and video-call artwork beyond CallStyle extras.
 3. **Minimal/detached presentation** — Apple's two-activity minimal layout; the current holder
    intentionally publishes one active source using the documented priority order.
 4. **Gesture mode** — optional Apple-style tap-to-open / long-press-to-expand.

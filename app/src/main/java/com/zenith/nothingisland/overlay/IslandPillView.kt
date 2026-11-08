@@ -1277,7 +1277,10 @@ internal class IslandPillView(context: Context) : View(context) {
 
     private fun expandedHit(visible: RectF, size: Float): RectF {
         val rect = RectF(visible)
-        rect.inset((rect.width() - size) / 2f, (rect.height() - size) / 2f)
+        // Grow small touch targets to the minimum, but never shrink a wide capsule button.
+        val dx = ((size - rect.width()) / 2f).coerceAtLeast(0f)
+        val dy = ((size - rect.height()) / 2f).coerceAtLeast(0f)
+        rect.inset(-dx, -dy)
         return rect
     }
 

@@ -59,6 +59,7 @@ class MediaSource(private val context: Context) {
     }
 
     fun updateEnabled(value: Boolean) {
+        if (enabled == value) return
         enabled = value
         if (!value) stop() else start()
     }
