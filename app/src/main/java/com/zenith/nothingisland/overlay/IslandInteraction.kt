@@ -14,4 +14,10 @@ interface IslandInteraction {
 
     /** Expanded timer: cancel the countdown and clear the pill. */
     fun onTimerStop()
+
+    fun onCallAnswer()
+    fun onCallDecline()
+    fun onCallEnd()
+    fun onOpenContent()
+    fun onCancelDownload()
 }

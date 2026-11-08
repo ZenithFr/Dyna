@@ -4,7 +4,13 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.NotificationListenerService.Ranking
 import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
+import com.zenith.nothingisland.data.IslandSettingsRepository
 import com.zenith.nothingisland.service.IslandService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * Notification access vehicle. It mirrors alerting notifications into the island and also tells
@@ -14,6 +20,7 @@ import com.zenith.nothingisland.service.IslandService
 class IslandNotificationListener : NotificationListenerService() {
 
     private var source: NotificationSource? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val notifications: NotificationSource
         get() = source ?: NotificationSource(this).also { source = it }
@@ -22,6 +29,11 @@ class IslandNotificationListener : NotificationListenerService() {
         super.onListenerConnected()
         // Media sessions become readable exactly now, so refresh instead of waiting for an event.
         IslandService.instance?.refreshMedia()
+        scope.launch {
+            IslandSettingsRepository.get(this@IslandNotificationListener).settings.collect { snapshot ->
+                notifications.updateSettings(snapshot)
+            }
+        }
     }
 
     override fun onListenerDisconnected() {
@@ -45,6 +57,7 @@ class IslandNotificationListener : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        scope.cancel()
         source?.clear()
         source = null
         super.onDestroy()

@@ -1,5 +1,6 @@
 package com.zenith.nothingisland.overlay
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -16,14 +17,14 @@ import android.text.TextUtils
 import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import com.zenith.nothingisland.data.IslandSettings
 import com.zenith.nothingisland.data.IslandShape
 import com.zenith.nothingisland.data.buildIslandPath
 import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandEvent
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.pow
 import kotlin.math.sin
 
 /**
@@ -38,6 +39,8 @@ internal class IslandPillView(context: Context) : View(context) {
     var listener: IslandInteraction? = null
 
     private val density = resources.displayMetrics.density
+    private var textScalePercent = 100
+    private var customization = IslandSettings()
 
     private val shellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -85,7 +88,22 @@ internal class IslandPillView(context: Context) : View(context) {
     private val chargingPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textSize = sp(13f)
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        fontFeatureSettings = "tnum"
+    }
+    private val expandedTimePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = sp(28f)
+        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        fontFeatureSettings = "tnum"
+    }
+    private val smallLabelPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = sp(11f)
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    }
+    private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val accentStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
     }
     private val holeRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -167,6 +185,7 @@ internal class IslandPillView(context: Context) : View(context) {
 
     private var highQualityMotion = true
     private var requestedRate = 0f
+    private var progressAnimating = false
 
     /** Overall morph position; 0 = compact pill, 1 = expanded card. */
     private val progress: Float
@@ -191,7 +210,16 @@ internal class IslandPillView(context: Context) : View(context) {
     private var animating = false
 
     private var pressed: Target? = null
+    private var activePointerId = -1
+    private var downX = 0f
+    private var downY = 0f
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private val targets = mutableListOf<Target>()
+    private val animatedFrame = RectF()
+    private var motionAllowed = true
+    /** Bumped only when the accessible content/controls change, not on timer ticks. */
+    var accessibilityRevision = 0
+        private set
 
     init {
         setBackgroundColor(Color.TRANSPARENT)
@@ -209,6 +237,12 @@ internal class IslandPillView(context: Context) : View(context) {
         compactCornerPx: Float,
         expandedCornerPx: Float,
     ) {
+        if (framesReady && compactBounds == compactFrame && expandedBounds == expandedFrame &&
+            dormantBounds == dormantFrame && satelliteBounds == satelliteFrame &&
+            this.compactCornerPx == compactCornerPx && this.expandedCornerPx == expandedCornerPx
+        ) {
+            return
+        }
         compactBounds.set(compactFrame)
         expandedBounds.set(expandedFrame)
         dormantBounds.set(dormantFrame)
@@ -245,6 +279,13 @@ internal class IslandPillView(context: Context) : View(context) {
         if (dormantTarget == target) return
         dormantTarget = target
         if (!framesReady) return
+        if (!motionAllowed) {
+            dormantProgress = target
+            dormantVelocity = 0f
+            dormantSettling = false
+            invalidate()
+            return
+        }
         dormantSettling = true
         lastStepMs = 0L
         requestMotionRate(true)
@@ -257,6 +298,15 @@ internal class IslandPillView(context: Context) : View(context) {
     fun setAod(enabled: Boolean) {
         if (aod == enabled) return
         aod = enabled
+        invalidate()
+    }
+
+    /** User customization: source accents, typography, margins, ambient rate and motion speed. */
+    fun setCustomization(settings: IslandSettings) {
+        val next = settings.coerced()
+        if (customization == next) return
+        customization = next
+        textScalePercent = customization.islandTextScalePercent
         invalidate()
     }
 
@@ -331,10 +381,11 @@ internal class IslandPillView(context: Context) : View(context) {
     fun render(event: IslandEvent?) {
         val newContent = event?.content
         val newExpanded = event?.expanded == true
+        motionAllowed = ValueAnimator.areAnimatorsEnabled()
 
         // A new notification arrives: reveal its text fluidly (per character, short stagger).
         val notification = newContent as? IslandContent.Notification
-        if (notification != null) {
+        if (notification != null && motionAllowed) {
             val key = "${notification.key}|${notification.title}|${notification.text}"
             if (key != revealTextKey) {
                 revealTextKey = key
@@ -350,7 +401,11 @@ internal class IslandPillView(context: Context) : View(context) {
         // the old card out instead of hard-cutting, the way a system activity update reads.
         val oldKey = contentKey(content)
         val newKey = contentKey(newContent)
-        if (oldKey != null && newKey != null && oldKey != newKey &&
+        if (oldKey != newKey || expanded != newExpanded) {
+            cancelTouch()
+            accessibilityRevision++
+        }
+        if (motionAllowed && oldKey != null && newKey != null && oldKey != newKey &&
             !springActive && framesReady
         ) {
             previousContent = content
@@ -363,13 +418,28 @@ internal class IslandPillView(context: Context) : View(context) {
 
         content = newContent
         expanded = newExpanded
-        animating = (newContent as? IslandContent.Media)?.isPlaying == true
+        animating = motionAllowed && (newContent as? IslandContent.Media)?.isPlaying == true
+        progressAnimating = motionAllowed && (newContent as? IslandContent.Download)?.indeterminate == true
         // Only persistent live activities detach their app into the bubble; a notification alert
-        // (or the transient charging alert) keeps the single shell.
+        // (or a transient battery/charging confirmation) keeps the single shell.
         satelliteShown = !newExpanded && satelliteIcon(newContent) != null
 
         val target = if (newExpanded) 1f else 0f
-        if (framesReady && !springActive && abs(progress - target) > 0.001f) {
+        if (!motionAllowed) {
+            widthProgress = target
+            heightProgress = target
+            widthVelocity = 0f
+            heightVelocity = 0f
+            springActive = false
+            dormantProgress = dormantTarget
+            dormantVelocity = 0f
+            dormantSettling = false
+            swapAnimating = false
+            previousContent = null
+            revealAnimating = false
+            removeCallbacks(settleWatchdog)
+            requestMotionRate(false)
+        } else if (framesReady && !springActive && abs(progress - target) > 0.001f) {
             springActive = true
             lastStepMs = 0L
             // Width leads, height follows: start both from where they currently sit.
@@ -385,9 +455,14 @@ internal class IslandPillView(context: Context) : View(context) {
     /** Identity of what the island is showing, ignoring per-second tick values. */
     private fun contentKey(value: IslandContent?): String? = when (value) {
         null -> null
-        is IslandContent.Media -> "media:${value.title}:${value.artist}:${value.isPlaying}"
+        is IslandContent.Media -> "media:${value.title}:${value.artist}"
         is IslandContent.Notification -> "notification:${value.key}"
         is IslandContent.Charging -> "charging"
+        is IslandContent.BatteryLow -> "battery-low"
+        is IslandContent.PowerSave -> "power-save:${value.enabled}"
+        is IslandContent.Call -> "call:${value.key}"
+        is IslandContent.Download -> "download:${value.key}"
+        is IslandContent.Navigation -> "navigation:${value.key}:${value.instruction}"
         is IslandContent.Timer -> "timer"
     }
 
@@ -453,13 +528,13 @@ internal class IslandPillView(context: Context) : View(context) {
         if (swapping) {
             drawContentStack(
                 canvas, outgoing, expandedIn, compactOut, widthCage,
-                widthPx, heightPx, stackAlpha = 1f - swapT,
+                stackAlpha = 1f - swapT,
             )
         }
         if (current != null) {
             drawContentStack(
                 canvas, current, expandedIn, compactOut, widthCage,
-                widthPx, heightPx, stackAlpha = if (swapping) swapT else 1f,
+                stackAlpha = if (swapping) swapT else 1f,
             )
         }
         canvas.restore()
@@ -469,9 +544,10 @@ internal class IslandPillView(context: Context) : View(context) {
         // No hit targets while morphing: a half-grown button should never be tappable.
         if (springActive || dormantSettling) {
             targets.clear()
-        } else if (current != null) {
-            // Whole-pill fallback target. Inserted first so the specific transport / action
-            // targets added above are found first by [targetAt].
+        } else if (current != null && current !is IslandContent.Charging &&
+            current !is IslandContent.BatteryLow && current !is IslandContent.PowerSave
+        ) {
+            // Whole-pill fallback target. Charging is a non-interactive confirmation.
             val body = currentFrame()
             targets.add(0, Target(TargetKind.Body, -1, body))
             // The detached bubble is part of the island: tapping it must do what tapping the
@@ -484,8 +560,9 @@ internal class IslandPillView(context: Context) : View(context) {
         val revealRunning = revealAnimating &&
             (now - revealStartMs) < REVEAL_TOTAL_MS
         if (revealAnimating && !revealRunning) revealAnimating = false
-        val busy = animating || springActive || dormantSettling || revealRunning || swapAnimating
-        requestMotionRate(busy)
+        val busy = animating || progressAnimating || springActive || dormantSettling || revealRunning || swapAnimating
+        val ambientOnly = (animating || progressAnimating) && !springActive && !dormantSettling && !revealRunning && !swapAnimating
+        requestMotionRate(busy, ambientOnly)
         if (busy) postInvalidateOnAnimation()
     }
 
@@ -496,8 +573,6 @@ internal class IslandPillView(context: Context) : View(context) {
         expandedIn: Float,
         compactOut: Float,
         cage: Float,
-        viewWidth: Float,
-        viewHeight: Float,
         stackAlpha: Float,
     ) {
         if (stackAlpha <= 0.002f) return
@@ -512,8 +587,6 @@ internal class IslandPillView(context: Context) : View(context) {
                 expandedVariant = false,
                 frame = compactBounds,
                 alpha = compactAlpha,
-                viewWidth = viewWidth,
-                viewHeight = viewHeight,
                 // The compact layout shrinks a touch as it hands over, so the transition reads as
                 // one surface changing shape rather than two cards swapping.
                 scale = 1f - 0.05f * (1f - compactOut),
@@ -527,8 +600,6 @@ internal class IslandPillView(context: Context) : View(context) {
                 expandedVariant = true,
                 frame = expandedBounds,
                 alpha = expandedAlpha,
-                viewWidth = viewWidth,
-                viewHeight = viewHeight,
                 scale = 0.94f + 0.06f * expandedIn,
                 risePx = (1f - expandedIn) * dp(5f),
             )
@@ -541,16 +612,15 @@ internal class IslandPillView(context: Context) : View(context) {
         expandedVariant: Boolean,
         frame: RectF,
         alpha: Float,
-        viewWidth: Float,
-        viewHeight: Float,
         scale: Float = 1f,
         risePx: Float = 0f,
     ) {
         val firstTarget = targets.size
         val save = canvas.save()
         if (alpha < 0.999f) {
+            // Bound the offscreen layer to the card, not the whole morph envelope.
             canvas.saveLayerAlpha(
-                0f, 0f, viewWidth, viewHeight,
+                frame.left, frame.top + risePx, frame.right, frame.bottom + risePx,
                 (alpha * 255f).toInt().coerceIn(0, 255),
             )
         }
@@ -568,23 +638,41 @@ internal class IslandPillView(context: Context) : View(context) {
         when (current) {
             is IslandContent.Media ->
                 if (expandedVariant) {
-                    drawMediaExpanded(canvas, current, areas, heightPx)
+                    drawMediaExpanded(canvas, current)
                 } else {
                     drawMediaCompact(canvas, current, areas, heightPx)
                 }
 
             is IslandContent.Notification ->
                 if (expandedVariant) {
-                    drawNotificationExpanded(canvas, current, areas, heightPx)
+                    drawNotificationExpanded(canvas, current)
                 } else {
                     drawNotificationCompact(canvas, current, areas, heightPx)
                 }
 
             is IslandContent.Charging -> drawCharging(canvas, current, areas, heightPx)
+            is IslandContent.BatteryLow -> drawBatteryLow(canvas, current, areas, heightPx)
+            is IslandContent.PowerSave -> drawPowerSave(canvas, current, areas, heightPx)
+
+            is IslandContent.Call ->
+                if (expandedVariant) drawCallExpanded(canvas, current)
+                else drawCompactIconText(canvas, current.icon, current.caller, areas, heightPx, Color.WHITE)
+
+            is IslandContent.Download ->
+                if (expandedVariant) drawDownloadExpanded(canvas, current)
+                else drawCompactIconText(
+                    canvas, current.icon,
+                    if (current.indeterminate) "…" else "${current.percent}%",
+                    areas, heightPx, customization.downloadColorArgb,
+                )
+
+            is IslandContent.Navigation ->
+                if (expandedVariant) drawNavigationExpanded(canvas, current)
+                else drawCompactIconText(canvas, current.icon, current.instruction, areas, heightPx, Color.WHITE)
 
             is IslandContent.Timer ->
                 if (expandedVariant) {
-                    drawTimerExpanded(canvas, current, areas, heightPx)
+                    drawTimerExpanded(canvas, current)
                 } else {
                     drawTimerCompact(canvas, current, areas, heightPx)
                 }
@@ -639,7 +727,7 @@ internal class IslandPillView(context: Context) : View(context) {
         val save = canvas.save()
         if (alpha < 0.995f) {
             canvas.saveLayerAlpha(
-                0f, 0f, width.toFloat(), height.toFloat(),
+                rect.left, rect.top, rect.right, rect.bottom,
                 (alpha * 255f).toInt().coerceIn(0, 255),
             )
         }
@@ -660,13 +748,19 @@ internal class IslandPillView(context: Context) : View(context) {
 
     /**
      * Launcher icon of a *persistent* live activity: the playing app for music, our own icon for
-     * the built-in timer. Notifications and the transient charging alert return null, so they
-     * never split the shell.
+     * the built-in timer, the owning app for maps and downloads. Notifications and the transient
+     * charging/battery confirmations return null, so they never split the shell. Returning null
+     * here also disables the bubble's hit target, so drawing and touch can never disagree.
      */
-    private fun satelliteIcon(value: IslandContent?): Drawable? = when (value) {
-        is IslandContent.Media -> value.appIcon
-        is IslandContent.Timer -> timerAppIcon()
-        else -> null
+    private fun satelliteIcon(value: IslandContent?): Drawable? {
+        if (!customization.detachedAppIcon) return null
+        return when (value) {
+            is IslandContent.Media -> value.appIcon
+            is IslandContent.Timer -> timerAppIcon()
+            is IslandContent.Navigation -> value.icon
+            is IslandContent.Download -> value.icon
+            else -> null
+        }
     }
 
     /** The island's own launcher icon, loaded once. */
@@ -715,11 +809,12 @@ internal class IslandPillView(context: Context) : View(context) {
         if (springActive) {
             val target = if (expanded) 1f else 0f
 
-            stepSpring(widthProgress, widthVelocity, target, WIDTH_OMEGA, WIDTH_ZETA, dt)
+            val motionScale = customization.motionScalePercent / 100f
+            stepSpring(widthProgress, widthVelocity, target, IslandMotion.WIDTH_OMEGA * motionScale, IslandMotion.WIDTH_ZETA, dt)
             widthProgress = springOut[0]
             widthVelocity = springOut[1]
 
-            stepSpring(heightProgress, heightVelocity, target, HEIGHT_OMEGA, HEIGHT_ZETA, dt)
+            stepSpring(heightProgress, heightVelocity, target, IslandMotion.HEIGHT_OMEGA * motionScale, IslandMotion.HEIGHT_ZETA, dt)
             heightProgress = springOut[0]
             heightVelocity = springOut[1]
 
@@ -739,7 +834,7 @@ internal class IslandPillView(context: Context) : View(context) {
         if (dormantSettling) {
             stepSpring(
                 dormantProgress, dormantVelocity, dormantTarget,
-                DORMANT_OMEGA, DORMANT_ZETA, dt,
+                IslandMotion.DORMANT_OMEGA * (customization.motionScalePercent / 100f), IslandMotion.DORMANT_ZETA, dt,
             )
             dormantProgress = springOut[0]
             dormantVelocity = springOut[1]
@@ -754,7 +849,7 @@ internal class IslandPillView(context: Context) : View(context) {
 
         if (!springActive && !dormantSettling) {
             removeCallbacks(settleWatchdog)
-            requestMotionRate(animating || revealAnimating)
+            requestMotionRate(animating || revealAnimating || progressAnimating, ambientOnly = animating || progressAnimating)
             // Let the owner re-place the touch window now that the shell is at rest.
             post { onMorphSettled?.invoke() }
         }
@@ -768,17 +863,15 @@ internal class IslandPillView(context: Context) : View(context) {
         zeta: Float,
         dt: Float,
     ) {
-        val accel = omega * omega * (target - position) - 2f * zeta * omega * velocity
-        val nextVelocity = velocity + accel * dt
-        springOut[0] = position + nextVelocity * dt
-        springOut[1] = nextVelocity
+        IslandMotion.stepSpring(position, velocity, target, omega, zeta, dt, springOut)
     }
 
     private fun currentFrame(): RectF {
         // Horizontal edges follow the leading spring, vertical edges the trailing one.
         val w = widthProgress
         val h = heightProgress
-        val frame = RectF(
+        val frame = animatedFrame
+        frame.set(
             lerp(compactBounds.left, expandedBounds.left, w),
             lerp(compactBounds.top, expandedBounds.top, h),
             lerp(compactBounds.right, expandedBounds.right, w),
@@ -807,7 +900,7 @@ internal class IslandPillView(context: Context) : View(context) {
      */
     private fun dormantWidthCage(cage: Float): Float {
         val t = cage.coerceIn(0f, 1f)
-        return 1f - (1f - t).pow(DORMANT_WIDTH_LEAD)
+        return IslandMotion.dormantWidthShare(t)
     }
 
     /**
@@ -817,7 +910,7 @@ internal class IslandPillView(context: Context) : View(context) {
      */
     private fun dormantHeightCage(cage: Float): Float {
         val t = cage.coerceIn(0f, 1f)
-        return smoothStep((t - DORMANT_HEIGHT_START) / (1f - DORMANT_HEIGHT_START))
+        return IslandMotion.dormantHeightShare(t)
     }
 
     /**
@@ -825,9 +918,10 @@ internal class IslandPillView(context: Context) : View(context) {
      * at 120 Hz — the pill is a small window, so it costs one small layer per frame — and the hint
      * is dropped to 0 the moment the island is still, so an idle pill never pins the panel high.
      */
-    private fun requestMotionRate(active: Boolean) {
+    private fun requestMotionRate(active: Boolean, ambientOnly: Boolean = false) {
         val rate = when {
-            !active -> 0f
+            !active || !motionAllowed -> 0f
+            ambientOnly -> customization.ambientFrameRateHz.toFloat()
             highQualityMotion -> 120f
             else -> 90f
         }
@@ -844,15 +938,14 @@ internal class IslandPillView(context: Context) : View(context) {
 
     /** 0 at start, 1 when settled; eased so the movement lands softly instead of linearly. */
     private fun smoothStep(value: Float): Float {
-        val x = value.coerceIn(0f, 1f)
-        return x * x * (3f - 2f * x)
+        return IslandMotion.smoothStep(value)
     }
 
     private fun easeOutCubic(value: Float): Float {
-        val inv = 1f - value
-        return 1f - inv * inv * inv
+        return IslandMotion.easeOutCubic(value)
     }
 
+    /** Whole-line content replacement: preserves shaping/kerning and allocates nothing per glyph. */
     private fun drawFluidText(
         canvas: Canvas,
         text: CharSequence,
@@ -860,30 +953,16 @@ internal class IslandPillView(context: Context) : View(context) {
         baseline: Float,
         paint: TextPaint,
     ) {
-        val string = text.toString()
         val elapsed = SystemClock.elapsedRealtime() - revealStartMs
-        if (!revealAnimating || elapsed >= REVEAL_TOTAL_MS) {
-            canvas.drawText(string, x, baseline, paint)
+        if (!revealAnimating || elapsed >= IslandMotion.REVEAL_DURATION_MS) {
+            canvas.drawText(text, 0, text.length, x, baseline, paint)
             return
         }
-        val baseAlpha = paint.alpha
-        var cursor = x
-        var index = 0
-        var offset = 0
-        while (offset < string.length) {
-            val codePoint = string.codePointAt(offset)
-            val length = Character.charCount(codePoint)
-            val chunk = string.substring(offset, offset + length)
-            val delay = min(index * REVEAL_STAGGER_MS, REVEAL_MAX_STAGGER_MS)
-            val t = ((elapsed - delay) / REVEAL_DURATION_MS).coerceIn(0f, 1f)
-            val eased = easeOutCubic(t)
-            paint.alpha = (baseAlpha * eased).toInt().coerceIn(0, 255)
-            canvas.drawText(chunk, cursor, baseline + (1f - eased) * dp(3.5f), paint)
-            cursor += paint.measureText(chunk)
-            offset += length
-            index++
-        }
-        paint.alpha = baseAlpha
+        val t = IslandMotion.easeOutCubic(elapsed / IslandMotion.REVEAL_DURATION_MS)
+        val alpha = paint.alpha
+        paint.alpha = (alpha * t).toInt().coerceIn(0, 255)
+        canvas.drawText(text, 0, text.length, x, baseline + (1f - t) * dp(3f), paint)
+        paint.alpha = alpha
     }
 
     /**
@@ -909,8 +988,8 @@ internal class IslandPillView(context: Context) : View(context) {
             return Areas(null, null, whole)
         }
 
-        val gap = dp(6f)
-        val minWidth = dp(24f)
+        val gap = dp(customization.sensorClearanceDp.toFloat())
+        val minWidth = dp(18f)
         val left = RectF(0f, 0f, (holeLeft - gap).coerceAtLeast(0f), heightPx)
         val right = RectF((holeRight + gap).coerceAtMost(widthPx), 0f, widthPx, heightPx)
         val leftOk = left.width() >= minWidth
@@ -921,6 +1000,20 @@ internal class IslandPillView(context: Context) : View(context) {
             rightOk -> Areas(null, null, right)
             else -> Areas(null, null, whole)
         }
+    }
+
+    /** Full-width region below the sensor; unlike compact content it is never split into columns. */
+    private fun expandedLowerArea(): RectF {
+        val width = expandedBounds.width()
+        val height = expandedBounds.height()
+        val margin = dp(customization.contentMarginDp.toFloat())
+        val holeBottom = holeCenterY - expandedBounds.top + holeRadiusPx
+        val top = if (holeRadiusPx > 0f) {
+            maxOf(margin, holeBottom + dp(customization.sensorClearanceDp.toFloat()))
+        } else {
+            margin
+        }.coerceAtMost(height - margin - dp(24f))
+        return RectF(margin, top, width - margin, height - margin)
     }
 
     private inline fun Canvas.inArea(area: RectF, block: () -> Unit) {
@@ -953,13 +1046,13 @@ internal class IslandPillView(context: Context) : View(context) {
             canvas.inArea(left) { drawCompactArt(canvas, media, left, heightPx) }
             canvas.inArea(right) {
                 val pad = dp(7f)
-                drawPlayingBars(canvas, right.left + pad, right.right - pad, heightPx)
+                drawPlayingBars(canvas, right.left + pad, right.right - pad, heightPx, media.accentColor)
             }
         } else {
             val area = areas.single
             canvas.inArea(area) {
                 val artRect = drawCompactArt(canvas, media, area, heightPx)
-                drawPlayingBars(canvas, artRect.right + dp(8f), area.right - dp(7f), heightPx)
+                drawPlayingBars(canvas, artRect.right + dp(8f), area.right - dp(7f), heightPx, media.accentColor)
             }
         }
     }
@@ -982,105 +1075,76 @@ internal class IslandPillView(context: Context) : View(context) {
         return artRect
     }
 
-    private fun drawMediaExpanded(
-        canvas: Canvas,
-        media: IslandContent.Media,
-        areas: Areas,
-        heightPx: Float,
-    ) {
-        val split = areas.split
-        val textArea = if (split) areas.left!! else areas.single
-        val controlsArea = if (split) areas.right!! else areas.single
-        val pad = dp(12f)
+    /**
+     * Apple-style Now Playing card: artwork/title/waveform above a progress row and unboxed
+     * transport controls. Everything lives below the lens, so the lower width is not split.
+     */
+    private fun drawMediaExpanded(canvas: Canvas, media: IslandContent.Media) {
+        val area = expandedLowerArea()
+        val artSize = dp(44f).coerceAtMost(area.height() * 0.42f)
+        val artRect = RectF(area.left, area.top, area.left + artSize, area.top + artSize)
+        drawArt(canvas, artRect, dp(9f), media.albumArt)
 
-        // A split body can be as narrow as ~86 dp per side (equal split, expanded pill), so the
-        // artwork and transport buttons shrink instead of spilling into the excluded hole area.
-        val artSize = if (split) {
-            (textArea.width() - pad * 2f - dp(32f)).coerceIn(dp(20f), dp(46f))
-        } else {
-            dp(46f)
-        }
-        val artRect = RectF(
-            textArea.left + pad,
-            (heightPx - artSize) / 2f,
-            textArea.left + pad + artSize,
-            (heightPx + artSize) / 2f,
-        )
-        drawArt(canvas, artRect, dp(8f), media.albumArt)
-
-        val buttonGap = if (split) dp(4f) else dp(5f)
-        val buttonSpace = (controlsArea.width() - pad * 2f - buttonGap * 2f)
-            .coerceAtLeast(dp(3f))
-        val buttonSize = (buttonSpace / 3f).coerceIn(dp(16f), dp(30f))
-        val controlsWidth = buttonSize * 3 + buttonGap * 2
-        val controlsLeft = (controlsArea.right - pad - controlsWidth)
-            .coerceAtLeast(controlsArea.left + dp(2f))
-        val controlsTop = (heightPx - buttonSize) / 2f - dp(3f)
-
+        val waveWidth = dp(20f)
         val textLeft = artRect.right + dp(10f)
-        val textRight = if (split) textArea.right - dp(8f) else controlsLeft - dp(8f)
-
-        val titleMax = (textRight - textLeft).coerceAtLeast(dp(24f))
-        titlePaint.textSize = sp(12.5f)
-        val title = TextUtils.ellipsize(media.title, titlePaint, titleMax, TextUtils.TruncateAt.END)
-        canvas.drawText(title, 0, title.length, textLeft, pad + titlePaint.textSize, titlePaint)
-
-        subtitlePaint.textSize = sp(10.5f)
-        val subtitleText = media.artist.ifBlank { "Now playing" }
-        val subtitle = TextUtils.ellipsize(
-            subtitleText,
-            subtitlePaint,
-            titleMax,
-            TextUtils.TruncateAt.END,
+        val textRight = (area.right - waveWidth - dp(10f)).coerceAtLeast(textLeft + dp(24f))
+        titlePaint.textSize = sp(14f)
+        subtitlePaint.textSize = sp(12f)
+        val title = TextUtils.ellipsize(media.title, titlePaint, textRight - textLeft, TextUtils.TruncateAt.END)
+        val artist = TextUtils.ellipsize(
+            media.artist.ifBlank { "Now playing" }, subtitlePaint, textRight - textLeft, TextUtils.TruncateAt.END,
         )
-        canvas.drawText(
-            subtitle,
-            0,
-            subtitle.length,
-            textLeft,
-            pad + titlePaint.textSize + dp(15f),
-            subtitlePaint,
-        )
+        canvas.drawText(title, 0, title.length, textLeft, area.top + dp(17f), titlePaint)
+        canvas.drawText(artist, 0, artist.length, textLeft, area.top + dp(35f), subtitlePaint)
+        canvas.save()
+        canvas.translate(0f, area.top)
+        drawPlayingBars(canvas, area.right - waveWidth, area.right, artSize, media.accentColor)
+        canvas.restore()
 
-        canvas.inArea(controlsArea) {
-            drawControlButton(
-                canvas, controlsLeft, controlsTop, buttonSize,
-                TransportCommand.Previous, isPlaying = false, clip = controlsArea,
-            )
-            drawControlButton(
-                canvas, controlsLeft + buttonSize + buttonGap, controlsTop, buttonSize,
-                TransportCommand.PlayPause, isPlaying = media.isPlaying, clip = controlsArea,
-            )
-            drawControlButton(
-                canvas, controlsLeft + (buttonSize + buttonGap) * 2, controlsTop, buttonSize,
-                TransportCommand.Next, isPlaying = false, clip = controlsArea,
-            )
-        }
-
-        val progressArea = areas.widest
-        val progressTop = heightPx - dp(9f)
-        val trackRect = RectF(
-            progressArea.left + pad,
-            progressTop,
-            progressArea.right - pad,
-            progressTop + dp(2.5f),
-        )
-        canvas.drawRoundRect(trackRect, dp(1.5f), dp(1.5f), trackPaint)
+        val position = media.estimatePositionMs(SystemClock.elapsedRealtime())
+        smallLabelPaint.textSize = sp(10f)
+        smallLabelPaint.color = Color.argb(170, 255, 255, 255)
+        val elapsedText = formatMediaTime(position)
+        val remainingText = if (media.durationMs > 0L) "-${formatMediaTime(media.durationMs - position)}" else ""
+        val remainingWidth = smallLabelPaint.measureText(remainingText)
+        val progressY = area.top + artSize + dp(12f)
+        val trackLeft = area.left + dp(22f)
+        val trackRight = (area.right - remainingWidth - dp(8f)).coerceAtLeast(trackLeft + dp(24f))
+        canvas.drawText(elapsedText, area.left, progressY + dp(3f), smallLabelPaint)
+        val track = RectF(trackLeft, progressY, trackRight, progressY + dp(3f))
+        canvas.drawRoundRect(track, dp(2f), dp(2f), trackPaint)
         if (media.durationMs > 0L) {
-            val fraction = (
-                media.estimatePositionMs(SystemClock.elapsedRealtime()).toFloat() /
-                    media.durationMs.toFloat()
-                ).coerceIn(0f, 1f)
-            if (fraction > 0f) {
-                val filled = RectF(
-                    trackRect.left,
-                    trackRect.top,
-                    trackRect.left + trackRect.width() * fraction,
-                    trackRect.bottom,
-                )
-                canvas.drawRoundRect(filled, dp(1.5f), dp(1.5f), progressPaint)
-            }
+            val fraction = (position.toFloat() / media.durationMs.toFloat()).coerceIn(0f, 1f)
+            canvas.drawRoundRect(
+                RectF(track.left, track.top, track.left + track.width() * fraction, track.bottom),
+                dp(2f), dp(2f), progressPaint,
+            )
         }
+        if (remainingText.isNotEmpty()) {
+            canvas.drawText(remainingText, area.right - remainingWidth, progressY + dp(3f), smallLabelPaint)
+        }
+
+        val buttonSize = dp(44f)
+        val buttonTop = (progressY + dp(12f)).coerceAtMost(area.bottom - buttonSize)
+        val spacing = dp(64f).coerceAtMost(area.width() / 3f)
+        val centerX = area.centerX()
+        drawControlButton(
+            canvas, centerX - spacing - buttonSize / 2f, buttonTop, buttonSize,
+            TransportCommand.Previous, isPlaying = false, background = false, enabled = media.canSeekPrevious,
+        )
+        drawControlButton(
+            canvas, centerX - buttonSize / 2f, buttonTop, buttonSize,
+            TransportCommand.PlayPause, isPlaying = media.isPlaying, background = false, enabled = media.canPlayPause,
+        )
+        drawControlButton(
+            canvas, centerX + spacing - buttonSize / 2f, buttonTop, buttonSize,
+            TransportCommand.Next, isPlaying = false, background = false, enabled = media.canSeekNext,
+        )
+    }
+
+    private fun formatMediaTime(ms: Long): String {
+        val seconds = (ms.coerceAtLeast(0L) + 500L) / 1000L
+        return "%d:%02d".format(seconds / 60L, seconds % 60L)
     }
 
     private fun drawNotificationCompact(
@@ -1089,17 +1153,24 @@ internal class IslandPillView(context: Context) : View(context) {
         areas: Areas,
         heightPx: Float,
     ) {
-        // No app icon here: the status bar already shows the same icon right above the island.
-        // The wider half of a split layout carries the title; a one-sided layout has one area.
-        val area = areas.widest
-        canvas.inArea(area) {
-            drawCompactNotificationTitle(
-                canvas,
-                notification.title,
-                area.left + dp(11f),
-                area.right - dp(8f),
-                heightPx,
-            )
+        val iconSize = (heightPx - dp(12f)).coerceIn(dp(14f), dp(20f))
+        if (areas.split) {
+            val left = areas.left!!
+            val right = areas.right!!
+            val iconLeft = left.centerX() - iconSize / 2f
+            canvas.inArea(left) {
+                drawIcon(canvas, notification.icon, RectF(iconLeft, (heightPx - iconSize) / 2f, iconLeft + iconSize, (heightPx + iconSize) / 2f))
+            }
+            canvas.inArea(right) {
+                drawCompactNotificationTitle(canvas, notification.title, right.left + dp(4f), right.right - dp(7f), heightPx)
+            }
+        } else {
+            val area = areas.single
+            canvas.inArea(area) {
+                val iconLeft = area.left + dp(7f)
+                drawIcon(canvas, notification.icon, RectF(iconLeft, (heightPx - iconSize) / 2f, iconLeft + iconSize, (heightPx + iconSize) / 2f))
+                drawCompactNotificationTitle(canvas, notification.title, iconLeft + iconSize + dp(6f), area.right - dp(7f), heightPx)
+            }
         }
     }
 
@@ -1117,93 +1188,41 @@ internal class IslandPillView(context: Context) : View(context) {
         drawFluidText(canvas, line, left, baseline, titlePaint)
     }
 
-    private fun drawNotificationExpanded(
-        canvas: Canvas,
-        notification: IslandContent.Notification,
-        areas: Areas,
-        heightPx: Float,
-    ) {
-        val split = areas.split
-        val textArea = if (split) areas.left!! else areas.single
-        val actionsArea = if (split) areas.right!! else areas.single
-        val pad = dp(12f)
-        val hasActions = notification.actions.isNotEmpty()
-
-        // The app icon is deliberately omitted: the status bar shows it just above the island.
-        val textLeft = textArea.left + pad
-        val textRight = textArea.right - pad
-        val textMax = (textRight - textLeft).coerceAtLeast(dp(24f))
-
-        titlePaint.textSize = sp(12.5f)
-        subtitlePaint.textSize = sp(10.5f)
-        val title = TextUtils.ellipsize(
-            notification.title,
-            titlePaint,
-            textMax,
-            TextUtils.TruncateAt.END,
+    private fun drawNotificationExpanded(canvas: Canvas, notification: IslandContent.Notification) {
+        val area = expandedLowerArea()
+        val iconSize = dp(20f)
+        val textLeft = area.left + iconSize + dp(8f)
+        val textMax = (area.right - textLeft).coerceAtLeast(dp(24f))
+        titlePaint.textSize = sp(14f)
+        subtitlePaint.textSize = sp(12f)
+        val title = TextUtils.ellipsize(notification.title, titlePaint, textMax, TextUtils.TruncateAt.END)
+        val body = TextUtils.ellipsize(
+            notification.text.ifBlank { notification.appLabel }, subtitlePaint, textMax, TextUtils.TruncateAt.END,
         )
-        val body = notification.text.ifBlank { notification.appLabel }
-        val line = TextUtils.ellipsize(body, subtitlePaint, textMax, TextUtils.TruncateAt.END)
-
-        // With buttons the text sits at the top; without them the two lines are centred so the
-        // expanded pill does not look top-heavy.
-        val blockHeight = titlePaint.textSize + dp(15f)
-        val titleBaseline = if (hasActions) {
-            pad + titlePaint.textSize
-        } else {
-            (heightPx - blockHeight) / 2f + titlePaint.textSize
-        }
-        canvas.inArea(textArea) {
-            drawFluidText(canvas, title, textLeft, titleBaseline, titlePaint)
-            drawFluidText(canvas, line, textLeft, titleBaseline + dp(15f), subtitlePaint)
-        }
+        val hasActions = notification.actions.isNotEmpty()
+        val textTop = if (hasActions) area.top else area.top + (area.height() - dp(38f)) / 2f
+        drawIcon(canvas, notification.icon, RectF(area.left, textTop + dp(2f), area.left + iconSize, textTop + dp(2f) + iconSize))
+        drawFluidText(canvas, title, textLeft, textTop + dp(16f), titlePaint)
+        drawFluidText(canvas, body, textLeft, textTop + dp(34f), subtitlePaint)
 
         if (hasActions) {
-            val pillHeight = dp(21f)
-            val pillTop = heightPx - pad - pillHeight
-            val rightLimit = actionsArea.right - pad
-            var left = actionsArea.left + if (split) dp(4f) else pad
-            canvas.inArea(actionsArea) {
-                notification.actions.take(2).forEachIndexed { index, action ->
-                    actionPaint.textSize = sp(9.5f)
-                    val textWidth = actionPaint.measureText(action.title)
-                    val pillWidth = textWidth + dp(18f)
-                    val pillRight = (left + pillWidth).coerceAtMost(rightLimit)
-                    if (pillRight - left < dp(20f)) return@forEachIndexed
-                    val rect = RectF(left, pillTop, pillRight, pillTop + pillHeight)
-                    canvas.drawRoundRect(rect, pillHeight / 2f, pillHeight / 2f, buttonPaint)
-                    val baseline = rect.centerY() - (actionPaint.descent() + actionPaint.ascent()) / 2f
-                    val label = TextUtils.ellipsize(
-                        action.title,
-                        actionPaint,
-                        rect.width() - dp(12f),
-                        TextUtils.TruncateAt.END,
-                    )
-                    canvas.drawText(label, 0, label.length, left + dp(9f), baseline, actionPaint)
-                    targets += Target(TargetKind.Action, index, rect)
-                    left = pillRight + dp(6f)
-                }
-            }
-        } else if (split) {
-            // Only the physically split right half gets the app name; on a single area the title
-            // and body already span the full width and a right-aligned label would collide.
-            val labelMax = (actionsArea.width() - pad * 2f).coerceAtLeast(dp(24f))
-            val label = TextUtils.ellipsize(
-                notification.appLabel,
-                subtitlePaint,
-                labelMax,
-                TextUtils.TruncateAt.END,
-            )
-            val labelBaseline = (heightPx - (subtitlePaint.descent() + subtitlePaint.ascent())) / 2f
-            canvas.inArea(actionsArea) {
-                canvas.drawText(
-                    label,
-                    0,
-                    label.length,
-                    actionsArea.right - pad - subtitlePaint.measureText(label.toString()),
-                    labelBaseline,
-                    subtitlePaint,
-                )
+            val actions = notification.actions.take(2)
+            val gap = dp(8f)
+            val visibleHeight = dp(36f)
+            val top = area.bottom - visibleHeight
+            val width = (area.width() - gap * (actions.size - 1)) / actions.size
+            actions.forEachIndexed { index, action ->
+                val left = area.left + index * (width + gap)
+                val rect = RectF(left, top, left + width, top + visibleHeight)
+                canvas.drawRoundRect(rect, dp(18f), dp(18f), buttonPaint)
+                actionPaint.textSize = sp(12f)
+                val label = TextUtils.ellipsize(action.title, actionPaint, width - dp(16f), TextUtils.TruncateAt.END)
+                val baseline = rect.centerY() - (actionPaint.descent() + actionPaint.ascent()) / 2f
+                canvas.drawText(label, 0, label.length, rect.centerX() - actionPaint.measureText(label.toString()) / 2f, baseline, actionPaint)
+                // The visible capsule stays compact; the touch target grows to 44 dp vertically.
+                val hit = RectF(rect)
+                hit.inset(0f, -dp(4f))
+                targets += Target(TargetKind.Action, index, hit)
             }
         }
     }
@@ -1214,236 +1233,190 @@ internal class IslandPillView(context: Context) : View(context) {
         areas: Areas,
         heightPx: Float,
     ) {
-        val area = areas.widest
-        canvas.inArea(area) {
-            val text = if (charging.level >= 0) "${charging.level}%" else "CHARGING"
-            chargingPaint.textSize = sp(13f)
-            val textWidth = chargingPaint.measureText(text)
-            val boltWidth = dp(11f)
-            val boltHeight = dp(16f)
-            val gap = dp(7f)
-            val totalWidth = boltWidth + gap + textWidth
-            val available = (area.width() - dp(8f)).coerceAtLeast(dp(1f))
-            // A centred hole can leave a narrow side; shrink the group rather than cross it.
-            val scale = (available / totalWidth).coerceIn(0.55f, 1f)
-
-            canvas.save()
-            canvas.translate(area.centerX(), heightPx / 2f)
-            canvas.scale(scale, scale)
-
-            val bx = -totalWidth / 2f
-            val by = -boltHeight / 2f
-            boltPath.reset()
-            boltPath.moveTo(bx + boltWidth * 0.58f, by)
-            boltPath.lineTo(bx + boltWidth * 0.12f, by + boltHeight * 0.56f)
-            boltPath.lineTo(bx + boltWidth * 0.44f, by + boltHeight * 0.56f)
-            boltPath.lineTo(bx + boltWidth * 0.34f, by + boltHeight)
-            boltPath.lineTo(bx + boltWidth * 0.88f, by + boltHeight * 0.42f)
-            boltPath.lineTo(bx + boltWidth * 0.54f, by + boltHeight * 0.42f)
-            boltPath.close()
-            canvas.drawPath(boltPath, whitePaint)
-
-            val baseline = -(chargingPaint.descent() + chargingPaint.ascent()) / 2f
-            canvas.drawText(text, bx + boltWidth + gap, baseline, chargingPaint)
-            canvas.restore()
+        val text = when {
+            charging.isFull -> "FULL"
+            charging.level >= 0 -> "${charging.level}%"
+            else -> "CHARGING"
+        }
+        chargingPaint.textSize = sp(13f)
+        chargingPaint.color = Color.WHITE
+        if (areas.split) {
+            canvas.inArea(areas.left!!) { drawBolt(canvas, areas.left.centerX(), heightPx / 2f, dp(16f)) }
+            canvas.inArea(areas.right!!) {
+                val width = chargingPaint.measureText(text)
+                val scale = ((areas.right.width() - dp(8f)) / width.coerceAtLeast(1f)).coerceAtMost(1f)
+                canvas.save()
+                canvas.scale(scale, scale, areas.right.centerX(), heightPx / 2f)
+                val baseline = heightPx / 2f - (chargingPaint.descent() + chargingPaint.ascent()) / 2f
+                canvas.drawText(text, areas.right.centerX() - width / 2f, baseline, chargingPaint)
+                canvas.restore()
+            }
+        } else {
+            val area = areas.single
+            canvas.inArea(area) {
+                val bolt = dp(12f)
+                val gap = dp(6f)
+                val width = chargingPaint.measureText(text)
+                val total = bolt + gap + width
+                val scale = ((area.width() - dp(12f)) / total.coerceAtLeast(1f)).coerceAtMost(1f)
+                canvas.save()
+                canvas.translate(area.centerX(), heightPx / 2f)
+                canvas.scale(scale, scale)
+                drawBolt(canvas, -total / 2f + bolt / 2f, 0f, bolt)
+                val baseline = -(chargingPaint.descent() + chargingPaint.ascent()) / 2f
+                canvas.drawText(text, -total / 2f + bolt + gap, baseline, chargingPaint)
+                canvas.restore()
+            }
         }
     }
 
-    /**
-     * Compact pill: always the countdown (mm:ss), centred in the wider side of the hole, with a
-     * small pause glyph while frozen. The label is not shown here — digits are the useful
-     * information at this size.
-     */
+    private fun drawBolt(canvas: Canvas, cx: Float, cy: Float, size: Float) {
+        accentPaint.color = customization.chargingColorArgb
+        boltPath.reset()
+        boltPath.moveTo(cx + size * 0.12f, cy - size / 2f)
+        boltPath.lineTo(cx - size * 0.34f, cy + size * 0.08f)
+        boltPath.lineTo(cx - size * 0.02f, cy + size * 0.08f)
+        boltPath.lineTo(cx - size * 0.12f, cy + size / 2f)
+        boltPath.lineTo(cx + size * 0.34f, cy - size * 0.1f)
+        boltPath.lineTo(cx + size * 0.02f, cy - size * 0.1f)
+        boltPath.close()
+        canvas.drawPath(boltPath, accentPaint)
+    }
+
+    /** Compact timer: leading timer/pause glyph, trailing tabular countdown. */
     private fun drawTimerCompact(
         canvas: Canvas,
         timer: IslandContent.Timer,
         areas: Areas,
         heightPx: Float,
     ) {
-        val area = areas.widest
-        canvas.inArea(area) {
-            val timeText = timer.displayTime
-            val timePaint = TextPaint(chargingPaint).apply { textSize = sp(13f) }
-            val timeWidth = timePaint.measureText(timeText)
-
-            // Pause glyph only while paused mid-countdown; finished 00:00 has nothing to freeze.
-            val showPause = !timer.isRunning && timer.remainingMs > 0L
-            val barWidth = dp(1.8f)
-            val barGap = dp(1.8f)
-            val glyphWidth = barWidth * 2f + barGap
-            val glyphHeight = heightPx * 0.34f
-            val glyphGap = if (showPause) dp(6f) else 0f
-
-            val totalWidth = glyphWidth + glyphGap + timeWidth
-            val available = (area.width() - dp(6f)).coerceAtLeast(dp(1f))
-            val scale = (available / totalWidth).coerceIn(0.6f, 1f)
-
-            canvas.save()
-            canvas.translate(area.centerX(), heightPx / 2f)
-            canvas.scale(scale, scale)
-
-            val left = -totalWidth / 2f
-            if (showPause) {
-                val cx = left + barWidth + barGap / 2f
-                val top = -glyphHeight / 2f
-                canvas.drawRoundRect(
-                    RectF(cx - barGap / 2f - barWidth, top, cx - barGap / 2f, top + glyphHeight),
-                    barWidth / 2f, barWidth / 2f, whitePaint,
-                )
-                canvas.drawRoundRect(
-                    RectF(cx + barGap / 2f, top, cx + barGap / 2f + barWidth, top + glyphHeight),
-                    barWidth / 2f, barWidth / 2f, whitePaint,
-                )
+        val paused = !timer.isRunning && timer.remainingMs > 0L
+        chargingPaint.textSize = sp(13f)
+        chargingPaint.color = customization.timerColorArgb
+        if (areas.split) {
+            canvas.inArea(areas.left!!) { drawTimerGlyph(canvas, areas.left.centerX(), heightPx / 2f, dp(15f), paused) }
+            canvas.inArea(areas.right!!) {
+                val text = timer.displayTime
+                val width = chargingPaint.measureText(text)
+                val scale = ((areas.right.width() - dp(6f)) / width.coerceAtLeast(1f)).coerceAtMost(1f)
+                canvas.save()
+                canvas.scale(scale, scale, areas.right.centerX(), heightPx / 2f)
+                val baseline = heightPx / 2f - (chargingPaint.descent() + chargingPaint.ascent()) / 2f
+                canvas.drawText(text, areas.right.centerX() - width / 2f, baseline, chargingPaint)
+                canvas.restore()
             }
-
-            val baseline = -(timePaint.descent() + timePaint.ascent()) / 2f
-            canvas.drawText(
-                timeText,
-                0,
-                timeText.length,
-                left + glyphWidth + glyphGap,
-                baseline,
-                timePaint,
-            )
-            canvas.restore()
-        }
-    }
-
-    /**
-     * Expanded pill: label + large countdown on the left, pause/resume and stop buttons on the
-     * right. When the hole splits the body, text and buttons live in their own areas; with a
-     * single area (one-side mode) the original full-width layout is used inside it.
-     */
-    private fun drawTimerExpanded(
-        canvas: Canvas,
-        timer: IslandContent.Timer,
-        areas: Areas,
-        heightPx: Float,
-    ) {
-        val split = areas.split
-        val textArea = if (split) areas.left!! else areas.single
-        val controlsArea = if (split) areas.right!! else areas.single
-        val pad = dp(12f)
-        val buttonHeight = dp(30f)
-        val buttonGap = dp(7f)
-        val finished = timer.remainingMs <= 0L
-
-        val toggleLabel = if (timer.isRunning) "PAUSE" else "RESUME"
-        actionPaint.textSize = sp(9.5f)
-        val toggleTextWidth = actionPaint.measureText(toggleLabel)
-        val stopTextWidth = actionPaint.measureText("STOP")
-        val naturalWidth = maxOf(toggleTextWidth, stopTextWidth) + dp(33f)
-        val availableButtons = (controlsArea.width() - pad * 2f).coerceAtLeast(dp(1f))
-        val maxButtonWidth = if (finished) availableButtons else (availableButtons - buttonGap) / 2f
-        val buttonWidth = minOf(naturalWidth, maxButtonWidth).coerceAtLeast(dp(30f))
-
-        val stopRect = RectF(
-            controlsArea.right - pad - buttonWidth,
-            (heightPx - buttonHeight) / 2f,
-            controlsArea.right - pad,
-            (heightPx + buttonHeight) / 2f,
-        )
-        val toggleRect = RectF(
-            stopRect.left - buttonGap - buttonWidth,
-            stopRect.top,
-            stopRect.left - buttonGap,
-            stopRect.bottom,
-        )
-
-        val textLeft = textArea.left + pad
-        val textRight = if (split) {
-            textArea.right - dp(10f)
         } else {
-            (if (finished) stopRect.left else toggleRect.left) - dp(10f)
-        }
-        val textMax = (textRight - textLeft).coerceAtLeast(dp(24f))
-
-        canvas.inArea(textArea) {
-            val labelPaint = TextPaint(titlePaint).apply {
-                textSize = sp(12.5f)
-                color = if (finished) Color.rgb(215, 25, 33) else Color.WHITE
+            val area = areas.single
+            canvas.inArea(area) {
+                val glyph = dp(15f)
+                val gap = dp(6f)
+                val text = timer.displayTime
+                val width = chargingPaint.measureText(text)
+                val total = glyph + gap + width
+                val scale = ((area.width() - dp(10f)) / total.coerceAtLeast(1f)).coerceAtMost(1f)
+                canvas.save()
+                canvas.translate(area.centerX(), heightPx / 2f)
+                canvas.scale(scale, scale)
+                drawTimerGlyph(canvas, -total / 2f + glyph / 2f, 0f, glyph, paused)
+                val baseline = -(chargingPaint.descent() + chargingPaint.ascent()) / 2f
+                canvas.drawText(text, -total / 2f + glyph + gap, baseline, chargingPaint)
+                canvas.restore()
             }
-            val timePaint = TextPaint(chargingPaint).apply { textSize = sp(26f) }
-
-            val label = TextUtils.ellipsize(
-                timer.label.ifBlank { "TIMER" },
-                labelPaint,
-                textMax,
-                TextUtils.TruncateAt.END,
-            )
-            val labelAscender = -labelPaint.ascent()
-            val timeAscender = -timePaint.ascent()
-            val groupHeight = labelAscender + dp(4f) + timeAscender
-            val top = (heightPx - groupHeight) / 2f
-
-            canvas.drawText(label, 0, label.length, textLeft, top + labelAscender, labelPaint)
-
-            // A split body leaves a narrow text column; scale the countdown rather than clip it.
-            val timeWidth = timePaint.measureText(timer.displayTime)
-            val timeScale = (textMax / timeWidth.coerceAtLeast(1f)).coerceIn(0.55f, 1f)
-            canvas.save()
-            canvas.translate(textLeft, top + labelAscender + dp(4f) + timeAscender)
-            canvas.scale(timeScale, timeScale)
-            canvas.drawText(timer.displayTime, 0f, 0f, timePaint)
-            canvas.restore()
-        }
-
-        canvas.inArea(controlsArea) {
-            if (!finished) {
-                drawTimerButton(canvas, toggleRect, toggleLabel, TimerGlyph.Toggle(timer.isRunning))
-                targets += Target(TargetKind.TimerToggle, -1, toggleRect)
-            }
-            drawTimerButton(canvas, stopRect, "STOP", TimerGlyph.Stop)
-            targets += Target(TargetKind.TimerStop, -1, stopRect)
         }
     }
 
-    /** Rounded button with a small glyph and a monospace-ish label, matching the media controls. */
-    private fun drawTimerButton(
-        canvas: Canvas,
-        rect: RectF,
-        label: String,
-        glyph: TimerGlyph,
-    ) {
-        canvas.drawRoundRect(rect, dp(10f), dp(10f), buttonPaint)
+    private fun drawTimerGlyph(canvas: Canvas, cx: Float, cy: Float, size: Float, paused: Boolean) {
+        accentPaint.color = customization.timerColorArgb
+        accentStrokePaint.color = customization.timerColorArgb
+        accentStrokePaint.strokeWidth = dp(1.8f)
+        if (paused) {
+            val bar = size * 0.18f
+            val gap = size * 0.16f
+            canvas.drawRoundRect(RectF(cx - gap - bar, cy - size * 0.38f, cx - gap, cy + size * 0.38f), bar / 2f, bar / 2f, accentPaint)
+            canvas.drawRoundRect(RectF(cx + gap, cy - size * 0.38f, cx + gap + bar, cy + size * 0.38f), bar / 2f, bar / 2f, accentPaint)
+        } else {
+            canvas.drawCircle(cx, cy + size * 0.06f, size * 0.38f, accentStrokePaint)
+            canvas.drawLine(cx, cy - size * 0.46f, cx, cy - size * 0.3f, accentStrokePaint)
+            canvas.drawLine(cx, cy + size * 0.06f, cx + size * 0.18f, cy - size * 0.12f, accentStrokePaint)
+        }
+    }
 
-        val glyphSize = dp(9f)
-        val gap = dp(6f)
-        actionPaint.textSize = sp(9.5f)
-        val labelWidth = actionPaint.measureText(label)
-        val contentLeft = rect.centerX() - (glyphSize + gap + labelWidth) / 2f
-        val cx = contentLeft + glyphSize / 2f
+    /** Apple-style timer card: circular pause/cancel controls leading, large orange time trailing. */
+    private fun drawTimerExpanded(canvas: Canvas, timer: IslandContent.Timer) {
+        val area = expandedLowerArea()
+        val finished = timer.remainingMs <= 0L
+        val visibleSize = dp(40f)
+        val hitSize = dp(44f)
+        val gap = dp(10f)
+        val cy = area.centerY()
+        val stopLeft = area.left + if (finished) 0f else visibleSize + gap
+        val stopRect = RectF(stopLeft, cy - visibleSize / 2f, stopLeft + visibleSize, cy + visibleSize / 2f)
+        if (!finished) {
+            val toggleRect = RectF(area.left, cy - visibleSize / 2f, area.left + visibleSize, cy + visibleSize / 2f)
+            drawTimerButton(canvas, toggleRect, TimerGlyph.Toggle(timer.isRunning))
+            targets += Target(TargetKind.TimerToggle, -1, expandedHit(toggleRect, hitSize))
+        }
+        drawTimerButton(canvas, stopRect, TimerGlyph.Stop)
+        targets += Target(TargetKind.TimerStop, -1, expandedHit(stopRect, hitSize))
+
+        expandedTimePaint.textSize = sp(28f)
+        expandedTimePaint.color = customization.timerColorArgb
+        val time = timer.displayTime
+        val timeWidth = expandedTimePaint.measureText(time)
+        val timeScale = ((area.right - stopRect.right - dp(12f)) / timeWidth.coerceAtLeast(1f)).coerceIn(0.6f, 1f)
+        val baseline = cy - (expandedTimePaint.descent() + expandedTimePaint.ascent()) / 2f
+        canvas.save()
+        canvas.scale(timeScale, timeScale, area.right, cy)
+        canvas.drawText(time, area.right - timeWidth, baseline, expandedTimePaint)
+        canvas.restore()
+        smallLabelPaint.textSize = sp(12f)
+        smallLabelPaint.color = customization.timerColorArgb
+        val label = if (finished) "TIME'S UP" else "Timer"
+        val labelWidth = smallLabelPaint.measureText(label)
+        val labelRight = area.right - timeWidth * timeScale - dp(8f)
+        if (labelRight - labelWidth > stopRect.right + dp(8f)) {
+            canvas.drawText(label, labelRight - labelWidth, baseline - dp(2f), smallLabelPaint)
+        }
+    }
+
+    private fun expandedHit(visible: RectF, size: Float): RectF {
+        val rect = RectF(visible)
+        // Grow small touch targets to the minimum, but never shrink a wide capsule button.
+        val dx = ((size - rect.width()) / 2f).coerceAtLeast(0f)
+        val dy = ((size - rect.height()) / 2f).coerceAtLeast(0f)
+        rect.inset(-dx, -dy)
+        return rect
+    }
+
+    private fun drawTimerButton(canvas: Canvas, rect: RectF, glyph: TimerGlyph) {
+        val toggle = glyph is TimerGlyph.Toggle
+        accentPaint.color = if (toggle) Color.argb(64, 255, 159, 10) else Color.rgb(44, 44, 46)
+        canvas.drawCircle(rect.centerX(), rect.centerY(), rect.width() / 2f, accentPaint)
+        val cx = rect.centerX()
         val cy = rect.centerY()
-        val baseline = cy - (actionPaint.descent() + actionPaint.ascent()) / 2f
-
+        val size = dp(16f)
+        accentPaint.color = if (toggle) customization.timerColorArgb else Color.WHITE
+        accentStrokePaint.color = Color.WHITE
+        accentStrokePaint.strokeWidth = dp(2.2f)
         when (glyph) {
             is TimerGlyph.Toggle -> if (glyph.pause) {
-                val barWidth = glyphSize * 0.28f
-                val barGap = glyphSize * 0.22f
-                canvas.drawRoundRect(
-                    RectF(cx - barGap / 2f - barWidth, cy - glyphSize / 2f, cx - barGap / 2f, cy + glyphSize / 2f),
-                    barWidth / 2f, barWidth / 2f, whitePaint,
-                )
-                canvas.drawRoundRect(
-                    RectF(cx + barGap / 2f, cy - glyphSize / 2f, cx + barGap / 2f + barWidth, cy + glyphSize / 2f),
-                    barWidth / 2f, barWidth / 2f, whitePaint,
-                )
+                val bar = size * 0.2f
+                val gap = size * 0.14f
+                canvas.drawRoundRect(RectF(cx - gap - bar, cy - size / 2f, cx - gap, cy + size / 2f), bar / 2f, bar / 2f, accentPaint)
+                canvas.drawRoundRect(RectF(cx + gap, cy - size / 2f, cx + gap + bar, cy + size / 2f), bar / 2f, bar / 2f, accentPaint)
             } else {
                 iconPath.reset()
-                iconPath.moveTo(cx - glyphSize * 0.32f, cy - glyphSize / 2f)
-                iconPath.lineTo(cx + glyphSize * 0.5f, cy)
-                iconPath.lineTo(cx - glyphSize * 0.32f, cy + glyphSize / 2f)
+                iconPath.moveTo(cx - size * 0.3f, cy - size / 2f)
+                iconPath.lineTo(cx + size * 0.5f, cy)
+                iconPath.lineTo(cx - size * 0.3f, cy + size / 2f)
                 iconPath.close()
-                canvas.drawPath(iconPath, whitePaint)
+                canvas.drawPath(iconPath, accentPaint)
             }
-
-            TimerGlyph.Stop -> canvas.drawRoundRect(
-                RectF(cx - glyphSize * 0.4f, cy - glyphSize * 0.4f, cx + glyphSize * 0.4f, cy + glyphSize * 0.4f),
-                dp(1.5f), dp(1.5f), whitePaint,
-            )
+            TimerGlyph.Stop -> {
+                canvas.drawLine(cx - size * 0.36f, cy - size * 0.36f, cx + size * 0.36f, cy + size * 0.36f, accentStrokePaint)
+                canvas.drawLine(cx + size * 0.36f, cy - size * 0.36f, cx - size * 0.36f, cy + size * 0.36f, accentStrokePaint)
+            }
         }
-
-        canvas.drawText(label, contentLeft + glyphSize + gap, baseline, actionPaint)
     }
 
     private sealed interface TimerGlyph {
@@ -1451,6 +1424,213 @@ internal class IslandPillView(context: Context) : View(context) {
         data object Stop : TimerGlyph
     }
 
+
+    /** Generic compact leading icon / trailing text used by calls, downloads and maps. */
+    private fun drawCompactIconText(
+        canvas: Canvas,
+        icon: Drawable?,
+        text: String,
+        areas: Areas,
+        heightPx: Float,
+        color: Int,
+    ) {
+        val iconSize = (heightPx - dp(12f)).coerceIn(dp(14f), dp(20f))
+        titlePaint.textSize = sp(11.5f)
+        titlePaint.color = color
+        if (areas.split) {
+            val left = areas.left!!
+            val right = areas.right!!
+            canvas.inArea(left) {
+                val l = left.centerX() - iconSize / 2f
+                drawIcon(canvas, icon, RectF(l, (heightPx - iconSize) / 2f, l + iconSize, (heightPx + iconSize) / 2f))
+            }
+            canvas.inArea(right) {
+                val available = (right.width() - dp(10f)).coerceAtLeast(dp(12f))
+                val line = TextUtils.ellipsize(text, titlePaint, available, TextUtils.TruncateAt.END)
+                val baseline = heightPx / 2f - (titlePaint.descent() + titlePaint.ascent()) / 2f
+                canvas.drawText(line, 0, line.length, right.left + dp(4f), baseline, titlePaint)
+            }
+        } else {
+            val area = areas.single
+            canvas.inArea(area) {
+                val l = area.left + dp(7f)
+                drawIcon(canvas, icon, RectF(l, (heightPx - iconSize) / 2f, l + iconSize, (heightPx + iconSize) / 2f))
+                val available = (area.right - l - iconSize - dp(12f)).coerceAtLeast(dp(12f))
+                val line = TextUtils.ellipsize(text, titlePaint, available, TextUtils.TruncateAt.END)
+                val baseline = heightPx / 2f - (titlePaint.descent() + titlePaint.ascent()) / 2f
+                canvas.drawText(line, 0, line.length, l + iconSize + dp(6f), baseline, titlePaint)
+            }
+        }
+        titlePaint.color = Color.WHITE
+    }
+
+    private fun drawBatteryLow(canvas: Canvas, content: IslandContent.BatteryLow, areas: Areas, heightPx: Float) {
+        drawBatteryStatus(canvas, "${content.level}%", customization.batteryLowColorArgb, areas, heightPx, content.level / 100f)
+    }
+
+    private fun drawPowerSave(canvas: Canvas, content: IslandContent.PowerSave, areas: Areas, heightPx: Float) {
+        drawBatteryStatus(
+            canvas,
+            if (content.enabled) "SAVER ON" else "SAVER OFF",
+            customization.powerSaveColorArgb,
+            areas,
+            heightPx,
+            if (content.enabled) 0.35f else 0.8f,
+        )
+    }
+
+    private fun drawBatteryStatus(canvas: Canvas, text: String, color: Int, areas: Areas, heightPx: Float, fill: Float) {
+        chargingPaint.textSize = sp(12f)
+        chargingPaint.color = Color.WHITE
+        val glyphWidth = dp(18f)
+        if (areas.split) {
+            canvas.inArea(areas.left!!) { drawBatteryGlyph(canvas, areas.left.centerX(), heightPx / 2f, glyphWidth, color, fill) }
+            canvas.inArea(areas.right!!) {
+                val width = chargingPaint.measureText(text)
+                val scale = ((areas.right.width() - dp(8f)) / width.coerceAtLeast(1f)).coerceAtMost(1f)
+                canvas.save()
+                canvas.scale(scale, scale, areas.right.centerX(), heightPx / 2f)
+                val baseline = heightPx / 2f - (chargingPaint.descent() + chargingPaint.ascent()) / 2f
+                canvas.drawText(text, areas.right.centerX() - width / 2f, baseline, chargingPaint)
+                canvas.restore()
+            }
+        } else {
+            val area = areas.single
+            canvas.inArea(area) {
+                val gap = dp(6f)
+                val width = chargingPaint.measureText(text)
+                val total = glyphWidth + gap + width
+                val scale = ((area.width() - dp(12f)) / total.coerceAtLeast(1f)).coerceAtMost(1f)
+                canvas.save()
+                canvas.translate(area.centerX(), heightPx / 2f)
+                canvas.scale(scale, scale)
+                drawBatteryGlyph(canvas, -total / 2f + glyphWidth / 2f, 0f, glyphWidth, color, fill)
+                val baseline = -(chargingPaint.descent() + chargingPaint.ascent()) / 2f
+                canvas.drawText(text, -total / 2f + glyphWidth + gap, baseline, chargingPaint)
+                canvas.restore()
+            }
+        }
+    }
+
+    private fun drawBatteryGlyph(canvas: Canvas, cx: Float, cy: Float, width: Float, color: Int, fill: Float) {
+        accentStrokePaint.color = color
+        accentStrokePaint.strokeWidth = dp(1.5f)
+        accentPaint.color = color
+        val batteryHeight = width * 0.52f
+        val body = RectF(cx - width / 2f, cy - batteryHeight / 2f, cx + width / 2f - dp(2f), cy + batteryHeight / 2f)
+        canvas.drawRoundRect(body, dp(2f), dp(2f), accentStrokePaint)
+        canvas.drawRect(body.right, cy - batteryHeight * 0.22f, body.right + dp(2f), cy + batteryHeight * 0.22f, accentPaint)
+        val inner = RectF(body.left + dp(1.5f), body.top + dp(1.5f), body.right - dp(1.5f), body.bottom - dp(1.5f))
+        canvas.drawRect(inner.left, inner.top, inner.left + inner.width() * fill.coerceIn(0f, 1f), inner.bottom, accentPaint)
+    }
+
+    private fun drawCallExpanded(canvas: Canvas, call: IslandContent.Call) {
+        val area = expandedLowerArea()
+        titlePaint.textSize = sp(15f)
+        subtitlePaint.textSize = sp(12f)
+        val caller = TextUtils.ellipsize(call.caller, titlePaint, area.width(), TextUtils.TruncateAt.END)
+        val subtitle = when {
+            call.isIncoming -> if (call.isVideo) "Incoming video call" else "Incoming call"
+            else -> call.appLabel
+        }
+        canvas.drawText(caller, 0, caller.length, area.left, area.top + dp(16f), titlePaint)
+        canvas.drawText(subtitle, 0, subtitle.length, area.left, area.top + dp(34f), subtitlePaint)
+
+        val size = dp(44f)
+        val top = (area.bottom - size).coerceAtLeast(area.top + dp(42f))
+        if (call.isIncoming && call.answerIntent != null && call.declineIntent != null) {
+            val decline = RectF(area.left, top, area.left + size, top + size)
+            val answer = RectF(area.right - size, top, area.right, top + size)
+            drawCallButton(canvas, decline, call.declineColor, answer = false)
+            drawCallButton(canvas, answer, call.answerColor, answer = true)
+            targets += Target(TargetKind.CallDecline, -1, decline)
+            targets += Target(TargetKind.CallAnswer, -1, answer)
+        } else {
+            val end = RectF(area.centerX() - size / 2f, top, area.centerX() + size / 2f, top + size)
+            drawCallButton(canvas, end, call.declineColor, answer = false)
+            targets += Target(TargetKind.CallEnd, -1, end)
+        }
+    }
+
+    private fun drawCallButton(canvas: Canvas, rect: RectF, color: Int, answer: Boolean) {
+        accentPaint.color = color
+        canvas.drawCircle(rect.centerX(), rect.centerY(), rect.width() / 2f, accentPaint)
+        canvas.save()
+        canvas.translate(rect.centerX(), rect.centerY())
+        canvas.rotate(if (answer) -45f else 135f)
+        val w = rect.width() * 0.46f
+        val h = rect.width() * 0.18f
+        canvas.drawRoundRect(RectF(-w / 2f, -h / 2f, w / 2f, h / 2f), h / 2f, h / 2f, whitePaint)
+        canvas.drawCircle(-w / 2f, 0f, h * 0.62f, whitePaint)
+        canvas.drawCircle(w / 2f, 0f, h * 0.62f, whitePaint)
+        canvas.restore()
+    }
+
+    private fun drawDownloadExpanded(canvas: Canvas, download: IslandContent.Download) {
+        val area = expandedLowerArea()
+        titlePaint.textSize = sp(14f)
+        subtitlePaint.textSize = sp(12f)
+        val title = TextUtils.ellipsize(download.title, titlePaint, area.width() - dp(44f), TextUtils.TruncateAt.END)
+        canvas.drawText(title, 0, title.length, area.left, area.top + dp(16f), titlePaint)
+        val label = if (download.indeterminate) "Working…" else "${download.percent}%"
+        smallLabelPaint.textSize = sp(12f)
+        smallLabelPaint.color = customization.downloadColorArgb
+        canvas.drawText(label, area.right - smallLabelPaint.measureText(label), area.top + dp(16f), smallLabelPaint)
+        if (download.text.isNotBlank()) {
+            val text = TextUtils.ellipsize(download.text, subtitlePaint, area.width(), TextUtils.TruncateAt.END)
+            canvas.drawText(text, 0, text.length, area.left, area.top + dp(34f), subtitlePaint)
+        }
+        val track = RectF(area.left, area.top + dp(44f), area.right, area.top + dp(48f))
+        canvas.drawRoundRect(track, dp(2f), dp(2f), trackPaint)
+        accentPaint.color = customization.downloadColorArgb
+        if (download.indeterminate) {
+            val phase = (SystemClock.elapsedRealtime() % 1200L) / 1200f
+            val segment = track.width() * 0.28f
+            val left = track.left + (track.width() + segment) * phase - segment
+            canvas.save()
+            canvas.clipRect(track)
+            canvas.drawRoundRect(RectF(left, track.top, left + segment, track.bottom), dp(2f), dp(2f), accentPaint)
+            canvas.restore()
+        } else {
+            canvas.drawRoundRect(
+                RectF(track.left, track.top, track.left + track.width() * download.percent / 100f, track.bottom),
+                dp(2f), dp(2f), accentPaint,
+            )
+        }
+        val buttonTop = (track.bottom + dp(10f)).coerceAtMost(area.bottom - dp(36f))
+        val openWidth = dp(96f)
+        val open = RectF(area.right - openWidth, buttonTop, area.right, buttonTop + dp(36f))
+        drawPillButton(canvas, open, "Open")
+        targets += Target(TargetKind.OpenContent, -1, expandedHit(open, dp(44f)))
+        if (download.cancelIntent != null) {
+            val cancel = RectF(area.left, buttonTop, area.left + dp(96f), buttonTop + dp(36f))
+            drawPillButton(canvas, cancel, "Cancel")
+            targets += Target(TargetKind.CancelDownload, -1, expandedHit(cancel, dp(44f)))
+        }
+    }
+
+    private fun drawNavigationExpanded(canvas: Canvas, navigation: IslandContent.Navigation) {
+        val area = expandedLowerArea()
+        titlePaint.textSize = sp(15f)
+        subtitlePaint.textSize = sp(12f)
+        val instruction = TextUtils.ellipsize(navigation.instruction, titlePaint, area.width(), TextUtils.TruncateAt.END)
+        canvas.drawText(instruction, 0, instruction.length, area.left, area.top + dp(18f), titlePaint)
+        val detail = TextUtils.ellipsize(
+            navigation.detail.ifBlank { navigation.appLabel }, subtitlePaint, area.width(), TextUtils.TruncateAt.END,
+        )
+        canvas.drawText(detail, 0, detail.length, area.left, area.top + dp(38f), subtitlePaint)
+        val open = RectF(area.right - dp(110f), area.bottom - dp(36f), area.right, area.bottom)
+        drawPillButton(canvas, open, "Open maps")
+        targets += Target(TargetKind.OpenContent, -1, expandedHit(open, dp(44f)))
+    }
+
+    private fun drawPillButton(canvas: Canvas, rect: RectF, label: String) {
+        canvas.drawRoundRect(rect, rect.height() / 2f, rect.height() / 2f, buttonPaint)
+        actionPaint.textSize = sp(12f)
+        val line = TextUtils.ellipsize(label, actionPaint, rect.width() - dp(16f), TextUtils.TruncateAt.END)
+        val baseline = rect.centerY() - (actionPaint.descent() + actionPaint.ascent()) / 2f
+        canvas.drawText(line, 0, line.length, rect.centerX() - actionPaint.measureText(line.toString()) / 2f, baseline, actionPaint)
+    }
 
     private fun drawControlButton(
         canvas: Canvas,
@@ -1460,9 +1640,17 @@ internal class IslandPillView(context: Context) : View(context) {
         transport: TransportCommand,
         isPlaying: Boolean,
         clip: RectF? = null,
+        background: Boolean = true,
+        enabled: Boolean = true,
     ) {
         val rect = RectF(left, top, left + size, top + size)
-        canvas.drawRoundRect(rect, dp(9f), dp(9f), buttonPaint)
+        if (background) canvas.drawRoundRect(rect, dp(9f), dp(9f), buttonPaint)
+        val kind = when (transport) {
+            TransportCommand.Previous -> TargetKind.Previous
+            TransportCommand.PlayPause -> TargetKind.PlayPause
+            TransportCommand.Next -> TargetKind.Next
+        }
+        val iconPaint = if (!enabled) mutedPaint else if (pressed?.kind == kind) mutedPaint else whitePaint
         val cx = rect.centerX()
         val cy = rect.centerY()
         val unit = size * 0.22f
@@ -1474,11 +1662,11 @@ internal class IslandPillView(context: Context) : View(context) {
                     val halfHeight = unit
                     canvas.drawRoundRect(
                         RectF(cx - unit * 0.75f, cy - halfHeight, cx - unit * 0.75f + barWidth, cy + halfHeight),
-                        0.6f, 0.6f, whitePaint,
+                        0.6f, 0.6f, iconPaint,
                     )
                     canvas.drawRoundRect(
                         RectF(cx + unit * 0.75f - barWidth, cy - halfHeight, cx + unit * 0.75f, cy + halfHeight),
-                        0.6f, 0.6f, whitePaint,
+                        0.6f, 0.6f, iconPaint,
                     )
                 } else {
                     iconPath.reset()
@@ -1486,7 +1674,7 @@ internal class IslandPillView(context: Context) : View(context) {
                     iconPath.lineTo(cx + unit * 0.95f, cy)
                     iconPath.lineTo(cx - unit * 0.55f, cy + unit)
                     iconPath.close()
-                    canvas.drawPath(iconPath, whitePaint)
+                    canvas.drawPath(iconPath, iconPaint)
                 }
             }
 
@@ -1495,7 +1683,7 @@ internal class IslandPillView(context: Context) : View(context) {
                 val barX = cx + direction * unit * 0.95f
                 canvas.drawRoundRect(
                     RectF(barX - unit * 0.14f, cy - unit, barX + unit * 0.14f, cy + unit),
-                    0.6f, 0.6f, whitePaint,
+                    0.6f, 0.6f, iconPaint,
                 )
                 iconPath.reset()
                 // Bar sits on the far side, triangle points toward it: |◀ for previous, ▶| for next.
@@ -1503,15 +1691,11 @@ internal class IslandPillView(context: Context) : View(context) {
                 iconPath.lineTo(cx + direction * unit * 0.62f, cy)
                 iconPath.lineTo(cx - direction * unit * 0.62f, cy + unit)
                 iconPath.close()
-                canvas.drawPath(iconPath, whitePaint)
+                canvas.drawPath(iconPath, iconPaint)
             }
         }
 
-        val kind = when (transport) {
-            TransportCommand.Previous -> TargetKind.Previous
-            TransportCommand.PlayPause -> TargetKind.PlayPause
-            TransportCommand.Next -> TargetKind.Next
-        }
+        if (!enabled) return
         // The drawing is clipped to the controls area, so the hit target must be too; otherwise a
         // cut-off button could still be tapped over the camera hole.
         val target = RectF(rect)
@@ -1520,15 +1704,16 @@ internal class IslandPillView(context: Context) : View(context) {
         }
     }
 
-    private fun drawPlayingBars(canvas: Canvas, left: Float, right: Float, heightPx: Float) {
+    private fun drawPlayingBars(canvas: Canvas, left: Float, right: Float, heightPx: Float, color: Int = Color.WHITE) {
         val available = (right - left).coerceAtLeast(dp(10f))
         val barWidth = dp(2.6f)
         val gap = dp(2.4f)
         val count = 3
         val total = barWidth * count + gap * (count - 1)
         var x = left + ((available - total) / 2f).coerceAtLeast(0f)
-        val maxHeight = heightPx * 0.44f
-        val minHeight = heightPx * 0.16f
+        val maxHeight = (heightPx * 0.44f).coerceAtMost(dp(22f))
+        val minHeight = (heightPx * 0.16f).coerceAtMost(dp(8f))
+        accentPaint.color = color
         val phase = (SystemClock.elapsedRealtime() % 900L) / 900f * (2f * Math.PI).toFloat()
 
         repeat(count) { index ->
@@ -1548,7 +1733,7 @@ internal class IslandPillView(context: Context) : View(context) {
                 RectF(x, top, x + barWidth, top + barHeight),
                 barWidth / 2f,
                 barWidth / 2f,
-                whitePaint,
+                accentPaint,
             )
             x += barWidth + gap
         }
@@ -1600,32 +1785,114 @@ internal class IslandPillView(context: Context) : View(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                pressed = targetAt(event.x, event.y)
-                if (pressed == null) return false
+                if (isMorphing()) return false
+                val target = targetAt(event.x, event.y) ?: return false
+                pressed = target
+                activePointerId = event.getPointerId(0)
+                downX = event.x
+                downY = event.y
                 invalidate()
                 return true
             }
-
+            MotionEvent.ACTION_MOVE -> {
+                val index = event.findPointerIndex(activePointerId)
+                if (index < 0) { cancelTouch(); return true }
+                val dx = event.getX(index) - downX
+                val dy = event.getY(index) - downY
+                if (dx * dx + dy * dy > touchSlop * touchSlop) cancelTouch()
+                return true
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (event.getPointerId(event.actionIndex) == activePointerId) cancelTouch()
+                return true
+            }
             MotionEvent.ACTION_UP -> {
+                val index = event.findPointerIndex(activePointerId)
                 val down = pressed
-                pressed = null
-                val up = targetAt(event.x, event.y)
-                if (down != null && up != null &&
-                    down.kind == up.kind && down.index == up.index
-                ) {
-                    dispatch(up)
+                cancelTouch()
+                if (index >= 0 && down != null && !isMorphing()) {
+                    val up = targetAt(event.getX(index), event.getY(index))
+                    if (up != null && down.kind == up.kind && down.index == up.index && down.rect.contains(event.getX(index), event.getY(index))) {
+                        dispatch(up)
+                    }
                 }
                 invalidate()
                 return true
             }
-
             MotionEvent.ACTION_CANCEL -> {
-                pressed = null
+                cancelTouch()
                 invalidate()
                 return true
             }
         }
         return super.onTouchEvent(event)
+    }
+
+    private fun cancelTouch() {
+        pressed = null
+        activePointerId = -1
+        invalidate()
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(settleWatchdog)
+        cancelTouch()
+        requestMotionRate(false)
+        super.onDetachedFromWindow()
+    }
+
+    /** Stable-at-rest virtual controls for the input window's accessibility provider. */
+    internal fun accessibilityTargets(): List<IslandAccessibleTarget> {
+        if (isMorphing() || content == null) return emptyList()
+        // The detached bubble shares the shell's Body action; expose it once, not twice.
+        var bodySeen = false
+        return targets.mapNotNull { target ->
+            if (target.kind == TargetKind.Body) {
+                if (bodySeen) return@mapNotNull null
+                bodySeen = true
+            }
+            IslandAccessibleTarget(accessibilityLabel(target), RectF(target.rect))
+        }
+    }
+
+    internal fun activateAccessibilityTarget(index: Int): Boolean {
+        if (isMorphing()) return false
+        val target = targets.getOrNull(index) ?: return false
+        dispatch(target)
+        return true
+    }
+
+    private fun accessibilityLabel(target: Target): String = when (target.kind) {
+        TargetKind.Body -> {
+            val name = when (content) {
+                is IslandContent.Media -> "media controls"
+                is IslandContent.Notification -> "notification"
+                is IslandContent.Timer -> "timer"
+                is IslandContent.Charging -> "charging status"
+                is IslandContent.BatteryLow -> "battery low"
+                is IslandContent.PowerSave -> "power save"
+                is IslandContent.Call -> "call"
+                is IslandContent.Download -> "download"
+                is IslandContent.Navigation -> "navigation"
+                null -> "island"
+            }
+            when {
+                content is IslandContent.Notification && expanded -> "Open notification"
+                expanded -> "Collapse $name"
+                else -> "Expand $name"
+            }
+        }
+        TargetKind.Previous -> "Previous track"
+        TargetKind.PlayPause -> if ((content as? IslandContent.Media)?.isPlaying == true) "Pause" else "Play"
+        TargetKind.Next -> "Next track"
+        TargetKind.Action -> (content as? IslandContent.Notification)?.actions?.getOrNull(target.index)?.title ?: "Notification action"
+        TargetKind.TimerToggle -> if ((content as? IslandContent.Timer)?.isRunning == true) "Pause timer" else "Resume timer"
+        TargetKind.TimerStop -> "Cancel timer"
+        TargetKind.CallAnswer -> "Answer call"
+        TargetKind.CallDecline -> "Decline call"
+        TargetKind.CallEnd -> "End call"
+        TargetKind.OpenContent -> "Open"
+        TargetKind.CancelDownload -> "Cancel download"
     }
 
     private fun targetAt(x: Float, y: Float): Target? {
@@ -1646,47 +1913,32 @@ internal class IslandPillView(context: Context) : View(context) {
             TargetKind.Action -> callback.onNotificationAction(target.index)
             TargetKind.TimerToggle -> callback.onTimerToggle()
             TargetKind.TimerStop -> callback.onTimerStop()
+            TargetKind.CallAnswer -> callback.onCallAnswer()
+            TargetKind.CallDecline -> callback.onCallDecline()
+            TargetKind.CallEnd -> callback.onCallEnd()
+            TargetKind.OpenContent -> callback.onOpenContent()
+            TargetKind.CancelDownload -> callback.onCancelDownload()
         }
     }
 
-    private enum class TargetKind { Body, Previous, PlayPause, Next, Action, TimerToggle, TimerStop }
+    private enum class TargetKind {
+        Body, Previous, PlayPause, Next, Action, TimerToggle, TimerStop,
+        CallAnswer, CallDecline, CallEnd, OpenContent, CancelDownload,
+    }
 
     private data class Target(val kind: TargetKind, val index: Int, val rect: RectF)
+
+    internal data class IslandAccessibleTarget(val label: String, val rect: RectF)
 
     private fun dp(value: Float): Float = value * density
 
     private fun sp(value: Float): Float =
-        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, value, resources.displayMetrics)
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, value, resources.displayMetrics) *
+            (textScalePercent / 100f)
 
     private fun lerp(from: Float, to: Float, t: Float): Float = from + (to - from) * t
 
     private companion object {
-        /**
-         * Morph springs. The width leads (fast, almost no bounce); the height trails it by roughly
-         * a tenth of a second so the shell stretches before it settles.
-         */
-        const val WIDTH_OMEGA = 24f
-        const val WIDTH_ZETA = 0.88f
-        const val HEIGHT_OMEGA = 17f
-        const val HEIGHT_ZETA = 0.9f
-
-        /**
-         * Curling into / out of the camera hole. Slower than the expand springs on purpose: the
-         * shell travels a much shorter distance and a ~420 ms glide gives the 120 Hz panel enough
-         * frames (~50) to read the motion instead of a one-frame pop into the lens.
-         */
-        const val DORMANT_OMEGA = 16f
-        const val DORMANT_ZETA = 0.9f
-
-        /**
-         * Curl staging. The exponent shapes the width curve (1.6 → ~67% of the width travel at the
-         * halfway point) and [DORMANT_HEIGHT_START] is where the height joins in, by which time the
-         * shell is already narrower than half its starting width, so it has somewhere to go: the
-         * hole.
-         */
-        const val DORMANT_WIDTH_LEAD = 1.6f
-        const val DORMANT_HEIGHT_START = 0.45f
-
         /**
          * Detached app-icon bubble: squircle corner as a fraction of its height (0.34 keeps it a
          * rounded square rather than a circle) and the icon inset inside the shell.
@@ -1700,13 +1952,9 @@ internal class IslandPillView(context: Context) : View(context) {
         /** Never let a lost frame callback strand the island in its oversized morph window. */
         const val MORPH_WATCHDOG_MS = 900L
 
-        /** Crossfade when the island switches activities while settled. */
-        const val SWAP_DURATION_MS = 160L
-
-        /** Reveal timing for incoming notification text. */
-        const val REVEAL_DURATION_MS = 260f
-        const val REVEAL_STAGGER_MS = 26f
-        const val REVEAL_MAX_STAGGER_MS = 240f
-        const val REVEAL_TOTAL_MS = REVEAL_MAX_STAGGER_MS + REVEAL_DURATION_MS
+        const val SWAP_DURATION_MS = IslandMotion.SWAP_DURATION_MS
+        val REVEAL_TOTAL_MS = IslandMotion.REVEAL_DURATION_MS.toLong()
+        const val customization.timerColorArgb = 0xFFFF9F0A.toInt()
+        const val customization.chargingColorArgb = 0xFF30D158.toInt()
     }
 }

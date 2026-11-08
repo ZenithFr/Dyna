@@ -6,6 +6,7 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.RectF
 import android.hardware.display.DisplayManager
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -16,9 +17,13 @@ import android.view.MotionEvent
 import android.view.Surface
 import android.view.View
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityNodeProvider
 import com.zenith.nothingisland.data.IslandSettings
 import com.zenith.nothingisland.data.IslandShape
 import com.zenith.nothingisland.data.pillLeftDp
+import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandEvent
 import kotlin.math.abs
 import kotlin.math.max
@@ -67,12 +72,9 @@ class IslandOverlay(private val serviceContext: Context) {
     private var layoutParams: WindowManager.LayoutParams? = null
     private var touchParams: WindowManager.LayoutParams? = null
     /** Settled geometry from the last [apply]; the touch window is placed from these. */
-    private var compactFootprint: Footprint? = null
-    private var expandedFootprint: Footprint? = null
     private var settings = IslandSettings().coerced()
     private var event: IslandEvent? = null
-    private var currentEvent: IslandEvent? = null
-    private var hiddenByFullscreen: Boolean = false
+    private var accessibilityRevision = -1
     /** Millisecond timestamp when the island first became idle (no content). */
     private var idleStartMs = 0L
     private val idleHandler = Handler(Looper.getMainLooper())
@@ -137,49 +139,9 @@ class IslandOverlay(private val serviceContext: Context) {
     /** Renders the holder's current event (null = idle pill). */
     fun render(newEvent: IslandEvent?) {
         event = newEvent
-        if (newEvent != null) currentEvent = newEvent
-        // The window already spans both states, so a morph starts without resizing the surface:
-        // the first animated frame lands in the same, still-valid buffer.
-        Log.w(TAG, "render content=${newEvent?.content?.javaClass?.simpleName} expanded=${newEvent?.expanded}")
+        // The window already spans both states, so a morph starts without resizing the surface.
         pill.render(newEvent)
         apply()
-        Log.w(TAG, "after apply dormant=${event?.content == null} window=${layoutParams?.let { "${it.width}x${it.height}@${it.x},${it.y}" }}")
-    }
-
-    /** Re-shows the pill after a fullscreen hide. */
-    /** Re-shows the pill after a fullscreen hide. */
-    fun showAgain() {
-        if (currentEvent != null && !hiddenByFullscreen) return
-        hiddenByFullscreen = false
-        val toShow = currentEvent
-        if (toShow != null) {
-            event = toShow
-            pill.render(toShow)
-            apply()
-        }
-    }
-
-    /**
-     * Called by [com.zenith.nothingisland.service.IslandService].onAccessibilityEvent when the
-     * accessibility event reports a window-state change. If the source window covers ≥95% of the
-     * display while the app is NOT hiding in fullscreen, hide the pill; otherwise re-show it via
-     * showAgain().
-     */
-    fun reportWindowEvent(sourceBounds: Rect?) {
-        if (sourceBounds == null) return
-        val screenBounds = windowManager.currentWindowMetrics.bounds
-        val metricW = screenBounds.width().coerceAtLeast(1)
-        val metricH = screenBounds.height().coerceAtLeast(1)
-        val coveredW = sourceBounds.width().toFloat() / metricW
-        val coveredH = sourceBounds.height().toFloat() / metricH
-        if (!settings.hideInFullscreen && coveredW >= 0.95f && coveredH >= 0.95f) {
-            hiddenByFullscreen = true
-            return
-        }
-        if (hiddenByFullscreen && !(coveredW >= 0.95f || coveredH >= 0.95f)) {
-            showAgain()
-            hiddenByFullscreen = false
-        }
     }
 
     fun hide() {
@@ -195,6 +157,7 @@ class IslandOverlay(private val serviceContext: Context) {
     fun release() {
         cancelIdleContraction()
         idleStartMs = 0L
+        pill.onMorphSettled = null
         hide()
         runCatching { displayManager.unregisterDisplayListener(displayListener) }
             .onFailure { Log.w(TAG, "Display listener was already detached", it) }
@@ -210,9 +173,6 @@ class IslandOverlay(private val serviceContext: Context) {
         val expandedFrame = footprint(expanded = true)
         val dormant = dormantFootprint()
         val satellite = satelliteFootprint(compact)
-        compactFootprint = compact
-        expandedFootprint = expandedFrame
-
         // One fixed window for both states, added once: expanding and retracting only ever move
         // rectangles inside it, so no frame is ever composited into a differently sized surface.
         val window = envelopeOf(compact, expandedFrame, dormant, satellite)
@@ -249,8 +209,8 @@ class IslandOverlay(private val serviceContext: Context) {
             expandedFrame = rectIn(expandedFrame, window),
             dormantFrame = rectIn(dormant, window),
             satelliteFrame = rectIn(satellite, window),
-            compactCornerPx = dp(compact.cornerRadiusDp.toFloat()).toFloat(),
-            expandedCornerPx = dp(expandedFrame.cornerRadiusDp.toFloat()).toFloat(),
+            compactCornerPx = dp(compact.cornerRadiusDp).toFloat(),
+            expandedCornerPx = dp(expandedFrame.cornerRadiusDp).toFloat(),
         )
         pill.setShape(settings.islandShape)
         pill.setStroke(
@@ -259,6 +219,7 @@ class IslandOverlay(private val serviceContext: Context) {
             colorArgb = settings.strokeColorArgb,
         )
         pill.setHighQualityMotion(settings.highQualityMotion)
+        pill.setCustomization(settings)
         pill.setAod(isAlwaysOn())
         // Idle contraction: the shell lingers for the configured delay, then curls up behind the
         // camera hole. Any content (notification, media, timer, charging) cancels the countdown
@@ -271,8 +232,6 @@ class IslandOverlay(private val serviceContext: Context) {
             cancelIdleContraction()
             pill.setDormant(false)
         }
-        Log.w(TAG, "apply content=${event?.content?.javaClass?.simpleName} exp=${event?.expanded} morph=${pill.isMorphing()}")
-
         // Hole in portrait screen px, converted to window-local coordinates for the renderer.
         val density = resources().displayMetrics.density
         val holeX = portraitWidthPx() / 2f + settings.holeCenterXDp * density
@@ -285,6 +244,10 @@ class IslandOverlay(private val serviceContext: Context) {
         )
 
         updateTouchWindow(compact, expandedFrame, satellite)
+        if (accessibilityRevision != pill.accessibilityRevision) {
+            accessibilityRevision = pill.accessibilityRevision
+            if (touchParams != null) touchShield.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+        }
     }
 
     /**
@@ -295,7 +258,7 @@ class IslandOverlay(private val serviceContext: Context) {
      */
     private fun satelliteFootprint(compact: Footprint): Envelope {
         val size = compact.heightPx
-        val gap = dp(SATELLITE_GAP_DP)
+        val gap = dp(settings.satelliteGapDp.toFloat())
         val portraitWidth = portraitWidthPx()
         // Never let it hang off the panel: with a wide / edge-anchored pill the bubble slides left
         // instead of being clipped by the display edge.
@@ -367,7 +330,10 @@ class IslandOverlay(private val serviceContext: Context) {
         if (layoutParams == null) return
         // Fully idle: the shell is curled up behind the lens and has nothing to tap, so drop the
         // input window entirely instead of leaving a dead rectangle at the top of the screen.
-        if (event?.content == null) {
+        val content = event?.content
+        if (content == null || content is IslandContent.Charging ||
+            content is IslandContent.BatteryLow || content is IslandContent.PowerSave
+        ) {
             removeTouchWindow()
             return
         }
@@ -386,7 +352,10 @@ class IslandOverlay(private val serviceContext: Context) {
         if (existing == null) {
             val params = buildLayoutParams(rect, touchable = true)
             runCatching { windowManager.addView(touchShield, params) }
-                .onSuccess { touchParams = params }
+                .onSuccess {
+                    touchParams = params
+                    touchShield.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+                }
                 .onFailure { Log.e(TAG, "Unable to add island touch window", it) }
         } else if (
             existing.width != rect.widthPx ||
@@ -399,6 +368,7 @@ class IslandOverlay(private val serviceContext: Context) {
             existing.x = rect.x
             existing.y = rect.y
             runCatching { windowManager.updateViewLayout(touchShield, existing) }
+                .onSuccess { touchShield.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) }
                 .onFailure {
                     Log.w(TAG, "updateViewLayout (touch) failed; island will be re-attached", it)
                     hide()
@@ -511,30 +481,45 @@ class IslandOverlay(private val serviceContext: Context) {
         val screenWidthDp = portraitWidth / resources().displayMetrics.density
 
         val widthDp = if (expanded) {
-            val maxWidth = (screenWidthDp - EXPANDED_SCREEN_MARGIN_DP).toInt()
-            // The calibrated width is the pill's maximum; the pressed/full view always grows past
-            // it so tapping always reveals more island, never less.
-            min(
-                max(settings.widthDp + EXPANDED_GROWTH_DP, EXPANDED_MIN_WIDTH_DP),
-                max(maxWidth, settings.widthDp),
-            )
+            IslandLayout.expandedWidthDp(screenWidthDp, settings.expandedMaxWidthDp.toFloat())
         } else {
-            settings.widthDp
+            IslandLayout.compactWidthDp(settings.widthDp.toFloat(), screenWidthDp)
         }
         val heightDp = if (expanded) {
-            max(settings.heightDp, EXPANDED_HEIGHT_DP)
+            val lowerHeight = when (val content = event?.content) {
+                is IslandContent.Media -> IslandLayout.MEDIA_CONTENT_HEIGHT_DP
+                is IslandContent.Notification -> if (content.actions.isEmpty()) {
+                    IslandLayout.NOTIFICATION_CONTENT_HEIGHT_DP
+                } else {
+                    IslandLayout.NOTIFICATION_ACTIONS_HEIGHT_DP
+                }
+                is IslandContent.Call -> IslandLayout.CALL_CONTENT_HEIGHT_DP
+                is IslandContent.Download -> IslandLayout.DOWNLOAD_CONTENT_HEIGHT_DP
+                is IslandContent.Navigation -> IslandLayout.NAVIGATION_CONTENT_HEIGHT_DP
+                // Battery/charging confirmations have no expanded presentation.
+                else -> IslandLayout.TIMER_CONTENT_HEIGHT_DP
+            }
+            IslandLayout.expandedHeightDp(
+                compactHeightDp = settings.heightDp.toFloat(),
+                lowerContentHeightDp = lowerHeight,
+                holeEnabled = settings.holeEnabled,
+                holeCenterYDp = settings.holeCenterYDp.toFloat(),
+                holeRadiusDp = settings.holeRadiusDp.toFloat(),
+                marginDp = settings.contentMarginDp.toFloat(),
+                clearanceDp = settings.sensorClearanceDp.toFloat(),
+            )
         } else {
-            settings.heightDp
+            settings.heightDp.toFloat()
         }
         val cornerDp = if (expanded) {
-            max(settings.cornerRadiusDp, EXPANDED_CORNER_RADIUS_DP)
-                .coerceAtMost(heightDp / 2)
+            // Apple's expanded corner is 44 pt; the user's compact radius remains independent.
+            settings.expandedCornerRadiusDp.toFloat().coerceAtMost(heightDp / 2f)
         } else {
-            settings.cornerRadiusDp
+            settings.cornerRadiusDp.toFloat()
         }
 
         val widthPx = dp(widthDp.toFloat())
-        val heightPx = dp(heightDp.toFloat())
+        val heightPx = dp(heightDp)
         val leftDp = settings.pillLeftDp(screenWidthDp, widthDp.toFloat())
         val leftPx = dp(leftDp).coerceIn(0, (portraitWidth - widthPx).coerceAtLeast(0))
         return Footprint(
@@ -600,7 +585,7 @@ class IslandOverlay(private val serviceContext: Context) {
         val heightPx: Int,
         val x: Int,
         val y: Int,
-        val cornerRadiusDp: Int,
+        val cornerRadiusDp: Float,
     )
 
     /** Fixed window rectangle that contains both the compact pill and the expanded view. */
@@ -616,6 +601,12 @@ class IslandOverlay(private val serviceContext: Context) {
      * at the offset between the two windows, so press states and hit boxes stay where the pixel is.
      */
     private inner class TouchShield(context: Context) : View(context) {
+        init {
+            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        }
+
+        override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibilityProvider
+
         override fun onTouchEvent(event: MotionEvent): Boolean {
             // [View.layoutParams] would shadow the overlay's window params here.
             val island = this@IslandOverlay.layoutParams ?: return false
@@ -630,18 +621,85 @@ class IslandOverlay(private val serviceContext: Context) {
         }
     }
 
+    /**
+     * The canvas has no child views, so expose its rest-state hit boxes as virtual buttons on the
+     * input window. TalkBack can then reach transport/timer/notification actions, not just a pill.
+     */
+    private val accessibilityProvider by lazy { object : AccessibilityNodeProvider() {
+        private var focusedId = -1
+
+        override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
+            val island = layoutParams ?: return null
+            val self = touchParams ?: return null
+            val targets = pill.accessibilityTargets()
+            if (virtualViewId == AccessibilityNodeProvider.HOST_VIEW_ID) {
+                val host = AccessibilityNodeInfo.obtain(touchShield)
+                host.className = View::class.java.name
+                targets.forEachIndexed { index, _ -> host.addChild(touchShield, index + 1) }
+                return host
+            }
+            val target = targets.getOrNull(virtualViewId - 1) ?: return null
+            val parentBounds = Rect(
+                target.rect.left.roundToInt() + island.x - self.x,
+                target.rect.top.roundToInt() + island.y - self.y,
+                target.rect.right.roundToInt() + island.x - self.x,
+                target.rect.bottom.roundToInt() + island.y - self.y,
+            )
+            val screenBounds = Rect(parentBounds).apply { offset(self.x, self.y) }
+            return AccessibilityNodeInfo.obtain().apply {
+                setSource(touchShield, virtualViewId)
+                setParent(touchShield)
+                packageName = serviceContext.packageName
+                className = "android.widget.Button"
+                contentDescription = target.label
+                isEnabled = true
+                isClickable = true
+                isFocusable = true
+                isVisibleToUser = true
+                isAccessibilityFocused = focusedId == virtualViewId
+                setBoundsInParent(parentBounds)
+                setBoundsInScreen(screenBounds)
+                addAction(AccessibilityNodeInfo.ACTION_CLICK)
+                addAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+                addAction(AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS)
+            }
+        }
+
+        override fun performAction(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {
+            when (action) {
+                AccessibilityNodeInfo.ACTION_CLICK -> {
+                    if (!pill.activateAccessibilityTarget(virtualViewId - 1)) return false
+                    sendEvent(virtualViewId, AccessibilityEvent.TYPE_VIEW_CLICKED)
+                    return true
+                }
+                AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
+                    focusedId = virtualViewId
+                    sendEvent(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+                    return true
+                }
+                AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> {
+                    if (focusedId == virtualViewId) focusedId = -1
+                    sendEvent(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
+                    return true
+                }
+            }
+            return false
+        }
+
+        private fun sendEvent(virtualViewId: Int, type: Int) {
+            val event = AccessibilityEvent.obtain(type).apply {
+                packageName = serviceContext.packageName
+                className = "android.widget.Button"
+                setSource(touchShield, virtualViewId)
+            }
+            touchShield.sendAccessibilityEventUnchecked(event)
+        }
+    } }
+
     private companion object {
         const val TAG = "IslandOverlay"
 
-        /** Expanded layouts need room for artwork + three transport buttons. */
-        const val EXPANDED_MIN_WIDTH_DP = 300
-        const val EXPANDED_GROWTH_DP = 80
-        const val EXPANDED_HEIGHT_DP = 84
-        const val EXPANDED_CORNER_RADIUS_DP = 22
-        const val EXPANDED_SCREEN_MARGIN_DP = 12
-
-        /** Detached app-icon bubble: gap from the compact pill and minimum screen-edge margin. */
-        const val SATELLITE_GAP_DP = 8f
+        /** Detached app-icon bubble: minimum screen-edge margin (the gap is user-configurable). */
         const val SATELLITE_MARGIN_DP = 2f
 
         /** Slack around both states so the spring overshoot is never clipped by the window. */

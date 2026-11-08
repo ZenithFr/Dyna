@@ -55,7 +55,9 @@ class IslandReplyWindow(private val serviceContext: Context) {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_ACTION_SEND
             setPadding(0, 0, 0, 0)
-            textSize = 14f
+            minHeight = dp(48f)
+            textSize = 16f
+            contentDescription = hintText
         }
 
         val send = TextView(serviceContext).apply {
@@ -63,8 +65,12 @@ class IslandReplyWindow(private val serviceContext: Context) {
             setTextColor(Color.WHITE)
             setTypeface(Typeface.DEFAULT, Typeface.BOLD)
             textSize = 11f
-            setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
-            background = roundedBackground(dp(14f), Color.argb(28, 255, 255, 255))
+            setPadding(dp(14f), dp(6f), dp(14f), dp(6f))
+            minWidth = dp(56f)
+            minHeight = dp(48f)
+            gravity = Gravity.CENTER
+            contentDescription = "Send reply"
+            background = roundedBackground(dp(24f), Color.argb(28, 255, 255, 255))
         }
 
         val row = LinearLayout(serviceContext).apply {
@@ -88,7 +94,7 @@ class IslandReplyWindow(private val serviceContext: Context) {
         }
 
         val screenWidth = manager.currentWindowMetrics.bounds.width()
-        val width = min(screenWidth - dp(32f), dp(380f))
+        val width = min(screenWidth - dp(32f), dp(380f)).coerceAtLeast(dp(120f))
         val params = WindowManager.LayoutParams(
             width,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -125,6 +131,14 @@ class IslandReplyWindow(private val serviceContext: Context) {
             }
         }
         send.setOnClickListener { submit() }
+        edit.setOnKeyListener { _, keyCode, event ->
+            if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+                hide()
+                true
+            } else {
+                false
+            }
+        }
         row.setOnKeyListener { _, keyCode, event ->
             if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
                 hide()

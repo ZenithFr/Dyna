@@ -5,7 +5,6 @@ import android.app.PendingIntent
 import android.app.RemoteInput
 import android.content.Intent
 import android.content.res.Configuration
-import android.graphics.Rect
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -45,6 +44,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
     private var overlay: IslandOverlay? = null
     private var settingsJob: Job? = null
     private var stateJob: Job? = null
+    private var replyKey: String? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -67,6 +67,13 @@ class IslandService : AccessibilityService(), IslandInteraction {
         settingsJob?.cancel()
         settingsJob = scope.launch {
             repository.settings.collect { snapshot ->
+                IslandStateHolder.updateAlertDurations(
+                    notificationMs = snapshot.notificationDurationSec * 1000L,
+                    chargingMs = snapshot.chargingDurationSec * 1000L,
+                    batteryMs = snapshot.batteryAlertDurationSec * 1000L,
+                )
+                chargingSource.updateSettings(snapshot)
+                mediaSource.updateEnabled(snapshot.mediaEnabled)
                 overlay?.updateSettings(snapshot)
             }
         }
@@ -74,6 +81,11 @@ class IslandService : AccessibilityService(), IslandInteraction {
         stateJob?.cancel()
         stateJob = scope.launch {
             IslandStateHolder.state.collect { event ->
+                val notificationKey = (event?.content as? IslandContent.Notification)?.key
+                if (replyWindow.isShowing && notificationKey != replyKey) {
+                    replyWindow.hide()
+                    replyKey = null
+                }
                 overlay?.render(event)
             }
         }
@@ -113,7 +125,10 @@ class IslandService : AccessibilityService(), IslandInteraction {
 
             IslandSource.Media -> IslandStateHolder.toggleExpanded()
             IslandSource.Timer -> IslandStateHolder.toggleExpanded()
-            // Charging has no expanded layout; idle pills do nothing.
+            IslandSource.Call -> IslandStateHolder.toggleExpanded()
+            IslandSource.Download -> IslandStateHolder.toggleExpanded()
+            IslandSource.Navigation -> IslandStateHolder.toggleExpanded()
+            // Charging / battery confirmations have no expanded layout.
             else -> Unit
         }
     }
@@ -134,15 +149,47 @@ class IslandService : AccessibilityService(), IslandInteraction {
         TimerModule.stop()
     }
 
+    override fun onCallAnswer() {
+        val call = IslandStateHolder.current?.content as? IslandContent.Call ?: return
+        fire(call.answerIntent)
+    }
+
+    override fun onCallDecline() {
+        val call = IslandStateHolder.current?.content as? IslandContent.Call ?: return
+        if (fire(call.declineIntent)) IslandStateHolder.clearCall(call.key)
+    }
+
+    override fun onCallEnd() {
+        val call = IslandStateHolder.current?.content as? IslandContent.Call ?: return
+        if (fire(call.hangUpIntent ?: call.declineIntent)) IslandStateHolder.clearCall(call.key)
+    }
+
+    override fun onOpenContent() {
+        val intent = when (val content = IslandStateHolder.current?.content) {
+            is IslandContent.Call -> content.contentIntent
+            is IslandContent.Download -> content.contentIntent
+            is IslandContent.Navigation -> content.contentIntent
+            is IslandContent.Notification -> content.contentIntent
+            else -> null
+        }
+        fire(intent)
+    }
+
+    override fun onCancelDownload() {
+        val download = IslandStateHolder.current?.content as? IslandContent.Download ?: return
+        if (fire(download.cancelIntent)) IslandStateHolder.clearDownload(download.key)
+    }
+
     override fun onNotificationAction(index: Int) {
         val event = IslandStateHolder.current ?: return
         val notification = event.content as? IslandContent.Notification ?: return
         val action = notification.actions.getOrNull(index) ?: return
 
         if (action.remoteInput == null) {
-            fire(action.pendingIntent)
+            if (fire(action.pendingIntent)) IslandStateHolder.clearNotification(notification.key)
             return
         }
+        if (action.pendingIntent == null) return
 
         val anchor = overlay?.bottomPx ?: 0
         val shown = runCatching {
@@ -151,10 +198,13 @@ class IslandService : AccessibilityService(), IslandInteraction {
                 hintText = "Reply to ${notification.title}",
             ) { text -> sendReply(action, text, notification.key) }
         }.getOrDefault(false)
-
-        // Fallback for devices that refuse IME focus on accessibility overlays: fire the action's
-        // intent, which opens the app's own reply UI for most messaging apps.
-        if (!shown) fire(action.pendingIntent)
+        if (shown) {
+            replyKey = notification.key
+        } else {
+            // A RemoteInput action expects results. Opening the conversation is safe; sending the
+            // bare reply PendingIntent without a result bundle is not a reliable app-UI fallback.
+            fire(notification.contentIntent)
+        }
     }
 
     private fun sendReply(action: NotificationAction, text: String, key: String) {
@@ -164,33 +214,33 @@ class IslandService : AccessibilityService(), IslandInteraction {
             putCharSequence(remoteInput.resultKey, text)
         }
         RemoteInput.addResultsToIntent(arrayOf(remoteInput), intent, results)
-        runCatching { action.pendingIntent?.send(this, 0, intent) }
+        val pending = action.pendingIntent ?: return
+        val sent = runCatching { pending.send(this, 0, intent) }
             .onFailure { Log.w(TAG, "Inline reply failed", it) }
+            .isSuccess
         // Only dismiss the alert that was replied to; a newer notification must not disappear.
-        IslandStateHolder.clearNotification(key)
+        if (sent) IslandStateHolder.clearNotification(key)
     }
 
     private fun openNotification(event: IslandEvent) {
         val notification = event.content as? IslandContent.Notification ?: return
-        fire(notification.contentIntent)
-        IslandStateHolder.clearNotification(notification.key)
+        if (fire(notification.contentIntent)) IslandStateHolder.clearNotification(notification.key)
     }
 
-    private fun fire(intent: PendingIntent?) {
-        val pending = intent ?: return
-        runCatching { pending.send() }
+    private fun fire(intent: PendingIntent?): Boolean {
+        val pending = intent ?: return false
+        return runCatching { pending.send() }
             .onFailure { Log.w(TAG, "Notification action failed", it) }
+            .isSuccess
     }
 
     // ---------------------------------------------------------------------------------------
     // Lifecycle
     // ---------------------------------------------------------------------------------------
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        val rect = Rect()
-        event?.source?.window?.getBoundsInScreen(rect) ?: return
-        overlay?.reportWindowEvent(rect)
-    }
+    // Fullscreen hiding is still a roadmap item. Retrieving window bounds would require
+    // canRetrieveWindowContent=true, which this service deliberately does not request.
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
 
     override fun onInterrupt() = Unit
 
@@ -219,6 +269,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
         stateJob = null
 
         runCatching { replyWindow.hide() }
+        replyKey = null
         overlay?.interaction = null
         overlay?.release()
         overlay = null

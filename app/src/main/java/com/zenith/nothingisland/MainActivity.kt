@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
                 )
 
                 var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled()) }
+                var islandRunning by remember { mutableStateOf(IslandService.isRunning) }
                 var notificationListenerEnabled by remember {
                     mutableStateOf(ServiceStatus.isNotificationListenerEnabled(this@MainActivity))
                 }
@@ -72,6 +73,7 @@ class MainActivity : ComponentActivity() {
                     lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                         while (true) {
                             serviceEnabled = isAccessibilityServiceEnabled()
+                            islandRunning = IslandService.isRunning
                             notificationListenerEnabled =
                                 ServiceStatus.isNotificationListenerEnabled(this@MainActivity)
                             batteryOptimizationIgnored =
@@ -85,6 +87,7 @@ class MainActivity : ComponentActivity() {
                 HomeScreen(
                     settings = settings,
                     serviceEnabled = serviceEnabled,
+                    islandRunning = islandRunning,
                     notificationListenerEnabled = notificationListenerEnabled,
                     batteryOptimizationIgnored = batteryOptimizationIgnored,
                     overlayGranted = overlayGranted,

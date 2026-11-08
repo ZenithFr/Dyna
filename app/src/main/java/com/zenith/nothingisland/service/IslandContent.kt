@@ -11,15 +11,24 @@ import android.graphics.drawable.Drawable
  * is playing and then collapse back to it.
  */
 enum class IslandSource(val priority: Int) {
-    Timer(5),
-    Media(4),
-    Call(3),
-    Notification(2),
-    Charging(1),
+    Call(9),
+    Notification(8),
+    Charging(7),
+    BatteryLow(6),
+    PowerSave(5),
+    Timer(4),
+    Navigation(3),
+    Download(2),
+    Media(1),
 }
 
 /** A single thing the island can show. Content classes are immutable snapshots. */
 sealed interface IslandContent {
+
+    companion object {
+        /** Apple's Now Playing waveform falls back to a warm orange when artwork has no color. */
+        const val DEFAULT_ACCENT_COLOR = 0xFFFF9F0A.toInt()
+    }
 
     /** Currently playing track. */
     data class Media(
@@ -31,6 +40,12 @@ sealed interface IslandContent {
         val durationMs: Long,
         val positionUpdatedAtElapsedMs: Long,
         val speed: Float,
+        /** Transport affordances advertised by the session; unsupported controls are not drawn. */
+        val canSeekPrevious: Boolean = true,
+        val canPlayPause: Boolean = true,
+        val canSeekNext: Boolean = true,
+        /** Tint sampled once from the artwork, used by the waveform like Apple's Now Playing pill. */
+        val accentColor: Int = IslandContent.DEFAULT_ACCENT_COLOR,
         /**
          * Launcher icon of the app that owns the session. A persistent live activity keeps the
          * shell compact and puts this icon in the detached bubble beside it, the way the system
@@ -41,9 +56,10 @@ sealed interface IslandContent {
 
         /** Playback position extrapolated from the last callback, without polling the session. */
         fun estimatePositionMs(nowElapsedMs: Long): Long {
-            if (durationMs <= 0L) return positionMs.coerceAtLeast(0L)
+            if (durationMs <= 0L || !isPlaying) return positionMs.coerceAtLeast(0L)
             val elapsed = (nowElapsedMs - positionUpdatedAtElapsedMs).coerceAtLeast(0L)
-            val projected = positionMs + (elapsed * speed).toLong()
+            val safeSpeed = if (speed.isFinite() && speed > 0f) speed else 1f
+            val projected = positionMs + (elapsed * safeSpeed).toLong()
             return projected.coerceIn(0L, durationMs)
         }
     }
@@ -64,6 +80,56 @@ sealed interface IslandContent {
     data class Charging(
         val level: Int,
         val isFull: Boolean,
+    ) : IslandContent
+
+    /** Low-battery threshold crossing. */
+    data class BatteryLow(val level: Int) : IslandContent
+
+    /** System power-save mode changed. */
+    data class PowerSave(val enabled: Boolean) : IslandContent
+
+    /** Incoming/ongoing call mirrored from a CallStyle notification. */
+    data class Call(
+        val key: String,
+        val packageName: String,
+        val appLabel: String,
+        val icon: Drawable?,
+        val caller: String,
+        val isVideo: Boolean,
+        val isIncoming: Boolean,
+        val answerIntent: PendingIntent?,
+        val declineIntent: PendingIntent?,
+        val hangUpIntent: PendingIntent?,
+        val contentIntent: PendingIntent?,
+        val answerColor: Int,
+        val declineColor: Int,
+    ) : IslandContent
+
+    /** Download / install / transfer progress from a progress notification. */
+    data class Download(
+        val key: String,
+        val packageName: String,
+        val appLabel: String,
+        val icon: Drawable?,
+        val title: String,
+        val text: String,
+        /** 0..100, or -1 when indeterminate. */
+        val percent: Int,
+        val contentIntent: PendingIntent?,
+        val cancelIntent: PendingIntent?,
+    ) : IslandContent {
+        val indeterminate: Boolean get() = percent < 0
+    }
+
+    /** Turn-by-turn / navigation status from a maps notification. */
+    data class Navigation(
+        val key: String,
+        val packageName: String,
+        val appLabel: String,
+        val icon: Drawable?,
+        val instruction: String,
+        val detail: String,
+        val contentIntent: PendingIntent?,
     ) : IslandContent
 
     /** A timer for counting down time. */
