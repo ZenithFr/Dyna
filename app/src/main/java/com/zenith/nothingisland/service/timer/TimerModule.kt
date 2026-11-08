@@ -64,7 +64,8 @@ object TimerModule {
     /** Starts (or replaces) the timer. [label] is shown in the expanded pill. */
     @Synchronized
     fun start(durationMs: Long, label: String = DEFAULT_LABEL) {
-        val duration = durationMs.coerceIn(1L, MAX_DURATION_MS)
+        require(durationMs in 1L..MAX_DURATION_MS) { "Timer duration must be between 1 ms and 24 h" }
+        val duration = durationMs
         cancelJobs()
         this.label = label.trim().ifEmpty { DEFAULT_LABEL }
         paused = false
@@ -168,7 +169,8 @@ object TimerModule {
      * A transient alert (notification / charging) outranks the timer, so it may be covering the
      * pill at the exact moment the countdown ends. The hold therefore starts only once the
      * finished timer is actually the visible event, so completion is never cleared unseen. Alerts
-     * expire on their own after ~4 s; the timeout is a safety net, not a polling loop.
+     * expire on their own after ~4 s; the timeout is a safety net, not a polling loop. A null
+     * holder publication is not treated as a visible timer (it can mean the overlay is gone).
      */
     @Synchronized
     private fun finish() {
@@ -182,7 +184,7 @@ object TimerModule {
         clearJob?.cancel()
         clearJob = scope.launch {
             withTimeoutOrNull(FINISHED_VISIBILITY_TIMEOUT_MS) {
-                IslandStateHolder.state.first { it?.source == IslandSource.Timer || it == null }
+                IslandStateHolder.state.first { it?.source == IslandSource.Timer }
             }
             delay(FINISHED_HOLD_MS)
             stop()

@@ -19,7 +19,10 @@ object ChargingEvents {
 
     private const val CONNECT_DEBOUNCE_MS = 1_500L
 
-    private var lastConfirmationAt = 0L
+    @Volatile
+    var chargingEnabled: Boolean = true
+
+    private var lastConfirmationAt = -CONNECT_DEBOUNCE_MS
     private var lastLevel = -1
     private var lastPlugged = -1
 
@@ -43,7 +46,7 @@ object ChargingEvents {
     @Synchronized
     fun onPowerDisconnected() {
         lastPlugged = 0
-        lastConfirmationAt = 0L
+        lastConfirmationAt = -CONNECT_DEBOUNCE_MS
         IslandStateHolder.clearCharging()
     }
 
@@ -73,7 +76,7 @@ object ChargingEvents {
     }
 
     private fun confirm(level: Int) {
-        if (level < 0) return
+        if (level < 0 || !chargingEnabled) return
         val now = SystemClock.elapsedRealtime()
         if (now - lastConfirmationAt < CONNECT_DEBOUNCE_MS) return
         lastConfirmationAt = now

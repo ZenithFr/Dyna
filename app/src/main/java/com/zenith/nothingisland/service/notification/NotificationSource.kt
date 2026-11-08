@@ -1,145 +1,307 @@
 package com.zenith.nothingisland.service.notification
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Person
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.Bundle
 import android.service.notification.NotificationListenerService.Ranking
 import android.service.notification.StatusBarNotification
 import android.util.Log
-import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.NotificationCompat
+import com.zenith.nothingisland.data.IslandSettings
 import com.zenith.nothingisland.service.IslandContent
+import com.zenith.nothingisland.service.IslandSource
 import com.zenith.nothingisland.service.IslandStateHolder
 import com.zenith.nothingisland.service.NotificationAction
 
 /**
- * Turns system notifications into island alerts.
- *
- * Everything is callback-driven. Filtering happens before anything touches the state holder:
- *  - own package, ongoing/foreground, group summaries, low-importance channels;
- *  - media and call categories (owned by the media module / reserved call module);
- *  - Do Not Disturb set to "none".
- *
- * Any failure is swallowed: a broken notification must never take down the listener.
+ * Routes public notification contracts into island sources:
+ * CallStyle -> calls, MessagingStyle -> messages, progress/ProgressStyle extras -> downloads,
+ * navigation category/maps packages -> maps. No Shizuku or private app API is required.
  */
 class NotificationSource(private val context: Context) {
 
     private val notificationManager: NotificationManager? =
         context.getSystemService(NotificationManager::class.java)
-
     private val packageManager: PackageManager = context.packageManager
+    private val keyguardManager: KeyguardManager? = context.getSystemService(KeyguardManager::class.java)
 
     private val labelCache = mutableMapOf<String, String>()
+    private val activeKeys = mutableMapOf<String, IslandSource>()
+    private val activePackages = mutableMapOf<String, String>()
+    private val signatures = mutableMapOf<String, String>()
+    private var settings = IslandSettings()
 
-    private var shownKey: String? = null
-    private var shownSignature: String? = null
+    fun updateSettings(next: IslandSettings) {
+        val previous = settings
+        settings = next.coerced()
+        if (!next.callsEnabled) IslandStateHolder.clearCall()
+        if (!next.notificationsEnabled) IslandStateHolder.clearNotification()
+        if (!next.downloadsEnabled) IslandStateHolder.clearDownload()
+        if (!next.navigationEnabled) IslandStateHolder.clearNavigation()
+        if (next.disabledPackages != previous.disabledPackages) {
+            val disabled = next.disabledPackages
+            activePackages.filterValues { it in disabled }.keys.toList().forEach { key ->
+                clearKey(key)
+            }
+        }
+    }
 
     fun onPosted(sbn: StatusBarNotification, ranking: Ranking?) {
         val notification = sbn.notification ?: return
-        if (!accept(sbn, notification, ranking)) return
-
+        val source = route(sbn, notification, ranking)
+        if (source == null) {
+            if (activeKeys.containsKey(sbn.key)) clearKey(sbn.key)
+            return
+        }
         val appLabel = appLabel(sbn.packageName)
-        val title = text(notification, Notification.EXTRA_CONVERSATION_TITLE)
-            ?: text(notification, Notification.EXTRA_TITLE)
-            ?: appLabel
-        val body = text(notification, Notification.EXTRA_BIG_TEXT)
-            ?: text(notification, Notification.EXTRA_TEXT)
-            ?: text(notification, Notification.EXTRA_SUMMARY_TEXT)
-            ?: ""
+        val redact = settings.redactOnLockscreen && keyguardManager?.isKeyguardLocked == true &&
+            notification.visibility != Notification.VISIBILITY_PUBLIC
+        val icon = if (redact) appIcon(sbn.packageName) else icon(notification, sbn.packageName)
+        val signature = when (source) {
+            IslandSource.Call -> callContent(sbn, notification, appLabel, icon, redact).signature()
+            IslandSource.Notification -> notificationContent(sbn, notification, appLabel, icon, redact).signature()
+            IslandSource.Download -> downloadContent(sbn, notification, appLabel, icon, redact).signature()
+            IslandSource.Navigation -> navigationContent(sbn, notification, appLabel, icon, redact).signature()
+            else -> return
+        }
+        if (signatures[sbn.key] == signature) return
+        signatures[sbn.key] = signature
+        activeKeys[sbn.key] = source
+        activePackages[sbn.key] = sbn.packageName
 
-        val actions = actions(notification)
-        val signature = listOf(title, body, actions.joinToString("|") { it.title }).joinToString("\u0000")
-        if (sbn.key == shownKey && signature == shownSignature) return
-
-        shownKey = sbn.key
-        shownSignature = signature
-
-        IslandStateHolder.postNotification(
-            IslandContent.Notification(
-                key = sbn.key,
-                packageName = sbn.packageName,
-                appLabel = appLabel,
-                icon = icon(notification, sbn.packageName),
-                title = title,
-                text = body,
-                actions = actions,
-                contentIntent = notification.contentIntent,
-            ),
-        )
+        when (source) {
+            IslandSource.Call -> IslandStateHolder.postCall(
+                callContent(sbn, notification, appLabel, icon, redact),
+                expanded = settings.autoExpandCalls,
+            )
+            IslandSource.Notification -> IslandStateHolder.postNotification(
+                notificationContent(sbn, notification, appLabel, icon, redact),
+            )
+            IslandSource.Download -> IslandStateHolder.postDownload(
+                downloadContent(sbn, notification, appLabel, icon, redact),
+            )
+            IslandSource.Navigation -> IslandStateHolder.postNavigation(
+                navigationContent(sbn, notification, appLabel, icon, redact),
+            )
+            else -> Unit
+        }
     }
 
     fun onRemoved(sbn: StatusBarNotification?) {
         val key = sbn?.key ?: return
-        if (key != shownKey) return
-        shownKey = null
-        shownSignature = null
-        IslandStateHolder.clearNotification(key)
+        clearKey(key)
     }
 
-    /** Listener disconnected / access revoked: drop the mirrored alert. */
     fun clear() {
-        shownKey = null
-        shownSignature = null
+        activeKeys.keys.toList().forEach { clearKey(it) }
+        labelCache.clear()
+        signatures.clear()
+        activePackages.clear()
         IslandStateHolder.clearNotification()
+        IslandStateHolder.clearCall()
+        IslandStateHolder.clearDownload()
+        IslandStateHolder.clearNavigation()
     }
 
-    private fun accept(
+    private fun clearKey(key: String) {
+        when (activeKeys.remove(key)) {
+            IslandSource.Call -> IslandStateHolder.clearCall(key)
+            IslandSource.Notification -> IslandStateHolder.clearNotification(key)
+            IslandSource.Download -> IslandStateHolder.clearDownload(key)
+            IslandSource.Navigation -> IslandStateHolder.clearNavigation(key)
+            else -> Unit
+        }
+        activePackages.remove(key)
+        signatures.remove(key)
+    }
+
+    private fun route(sbn: StatusBarNotification, notification: Notification, ranking: Ranking?): IslandSource? {
+        if (sbn.packageName == context.packageName) return null
+        if (sbn.packageName in settings.disabledPackages) return null
+        if (notification.visibility == Notification.VISIBILITY_SECRET) return null
+        @Suppress("DEPRECATION")
+        if (notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return null
+        if (isDoNotDisturbSilent()) return null
+        if (isLowImportance(ranking)) return null
+
+        val category = notification.category
+        val ongoing = sbn.isOngoing || notification.flags and Notification.FLAG_ONGOING_EVENT != 0
+        if (category == Notification.CATEGORY_CALL) {
+            return if (settings.callsEnabled) IslandSource.Call else null
+        }
+        if (isMedia(notification)) return null
+        if (category == Notification.CATEGORY_SERVICE) return null
+        if (category == Notification.CATEGORY_NAVIGATION ||
+            (ongoing && sbn.packageName in PopularIntegrations.mapsPackages)
+        ) {
+            return if (settings.navigationEnabled) IslandSource.Navigation else null
+        }
+        if (hasProgress(notification)) {
+            return if (settings.downloadsEnabled) IslandSource.Download else null
+        }
+        if (ongoing) return null
+        return if (settings.notificationsEnabled) IslandSource.Notification else null
+    }
+
+    private fun callContent(
         sbn: StatusBarNotification,
         notification: Notification,
-        ranking: Ranking?,
-    ): Boolean {
-        if (sbn.packageName == context.packageName) return false
-        if (sbn.isOngoing) return false
-        if (notification.flags and Notification.FLAG_ONGOING_EVENT != 0) return false
-        @Suppress("DEPRECATION")
-        if (notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return false
-        if (isMediaOrCall(notification)) return false
-        if (isDoNotDisturbSilent()) return false
-        if (isLowImportance(ranking)) return false
-        return true
+        appLabel: String,
+        icon: Drawable?,
+        redact: Boolean,
+    ): IslandContent.Call {
+        val extras = notification.extras ?: Bundle.EMPTY
+        val callType = extras.getInt(Notification.EXTRA_CALL_TYPE, Notification.CallStyle.CALL_TYPE_INCOMING)
+        val person = parcelableExtra(extras, Notification.EXTRA_CALL_PERSON, Person::class.java)
+        val caller = when {
+            redact -> if (callType == Notification.CallStyle.CALL_TYPE_INCOMING) "Incoming call" else appLabel
+            else -> person?.name?.toString()?.takeIf { it.isNotBlank() }
+                ?: text(notification, Notification.EXTRA_TITLE)
+                ?: appLabel
+        }
+        return IslandContent.Call(
+            key = sbn.key,
+            packageName = sbn.packageName,
+            appLabel = appLabel,
+            icon = icon,
+            caller = caller,
+            isVideo = extras.getBoolean(Notification.EXTRA_CALL_IS_VIDEO, false),
+            isIncoming = callType == Notification.CallStyle.CALL_TYPE_INCOMING || callType == Notification.CallStyle.CALL_TYPE_SCREENING,
+            answerIntent = pendingIntentExtra(extras, Notification.EXTRA_ANSWER_INTENT),
+            declineIntent = pendingIntentExtra(extras, Notification.EXTRA_DECLINE_INTENT),
+            hangUpIntent = pendingIntentExtra(extras, Notification.EXTRA_HANG_UP_INTENT),
+            contentIntent = notification.contentIntent,
+            answerColor = extras.getInt(Notification.EXTRA_ANSWER_COLOR, settings.callAnswerColorArgb),
+            declineColor = extras.getInt(Notification.EXTRA_DECLINE_COLOR, settings.callDeclineColorArgb),
+        )
     }
 
-    private fun isMediaOrCall(notification: Notification): Boolean {
-        val category = notification.category
-        if (category == Notification.CATEGORY_TRANSPORT ||
-            category == Notification.CATEGORY_CALL ||
-            category == Notification.CATEGORY_MISSED_CALL ||
-            category == Notification.CATEGORY_SERVICE
-        ) {
-            return true
+    private fun notificationContent(
+        sbn: StatusBarNotification,
+        notification: Notification,
+        appLabel: String,
+        icon: Drawable?,
+        redact: Boolean,
+    ): IslandContent.Notification {
+        val messaging = runCatching {
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
+        }.getOrNull()
+        val latest = messaging?.messages?.lastOrNull()
+        val sender = latest?.senderPerson?.name?.toString() ?: latest?.sender?.toString()
+        val title = when {
+            redact -> appLabel
+            messaging?.conversationTitle?.isNotBlank() == true -> messaging.conversationTitle.toString()
+            sender?.isNotBlank() == true -> sender
+            else -> text(notification, Notification.EXTRA_CONVERSATION_TITLE)
+                ?: text(notification, Notification.EXTRA_TITLE)
+                ?: appLabel
         }
+        val body = when {
+            redact -> "Notification"
+            latest?.text?.isNotBlank() == true -> latest.text.toString()
+            else -> text(notification, Notification.EXTRA_BIG_TEXT)
+                ?: text(notification, Notification.EXTRA_TEXT)
+                ?: text(notification, Notification.EXTRA_SUMMARY_TEXT)
+                ?: ""
+        }
+        return IslandContent.Notification(
+            key = sbn.key,
+            packageName = sbn.packageName,
+            appLabel = appLabel,
+            icon = icon,
+            title = title,
+            text = body,
+            actions = if (redact) emptyList() else actions(notification),
+            contentIntent = if (redact) null else notification.contentIntent,
+        )
+    }
+
+    private fun downloadContent(
+        sbn: StatusBarNotification,
+        notification: Notification,
+        appLabel: String,
+        icon: Drawable?,
+        redact: Boolean,
+    ): IslandContent.Download {
+        val extras = notification.extras ?: Bundle.EMPTY
+        val indeterminate = extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false)
+        val progress = extras.getInt(Notification.EXTRA_PROGRESS, -1)
+        val max = extras.getInt(Notification.EXTRA_PROGRESS_MAX, 100).coerceAtLeast(1)
+        val percent = when {
+            indeterminate -> -1
+            progress < 0 -> -1
+            else -> (progress * 100L / max).toInt().coerceIn(0, 100)
+        }
+        val cancel = notification.actions.orEmpty().firstOrNull { action ->
+            val title = action.title?.toString()?.lowercase().orEmpty()
+            "cancel" in title || "stop" in title || "pause" in title
+        }?.actionIntent
+        return IslandContent.Download(
+            key = sbn.key,
+            packageName = sbn.packageName,
+            appLabel = appLabel,
+            icon = icon,
+            title = if (redact) appLabel else text(notification, Notification.EXTRA_TITLE) ?: appLabel,
+            text = if (redact) "" else text(notification, Notification.EXTRA_TEXT) ?: "",
+            percent = percent,
+            contentIntent = if (redact) null else notification.contentIntent,
+            cancelIntent = if (redact) null else cancel,
+        )
+    }
+
+    private fun navigationContent(
+        sbn: StatusBarNotification,
+        notification: Notification,
+        appLabel: String,
+        icon: Drawable?,
+        redact: Boolean,
+    ): IslandContent.Navigation = IslandContent.Navigation(
+        key = sbn.key,
+        packageName = sbn.packageName,
+        appLabel = appLabel,
+        icon = icon,
+        instruction = if (redact) appLabel else text(notification, Notification.EXTRA_TITLE)
+            ?: text(notification, Notification.EXTRA_TEXT)
+            ?: appLabel,
+        detail = if (redact) "" else text(notification, Notification.EXTRA_TEXT)
+            ?: text(notification, Notification.EXTRA_SUB_TEXT)
+            ?: "",
+        contentIntent = if (redact) null else notification.contentIntent,
+    )
+
+    private fun hasProgress(notification: Notification): Boolean {
+        val extras = notification.extras ?: return false
+        return extras.containsKey(Notification.EXTRA_PROGRESS) ||
+            extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false)
+    }
+
+    private fun isMedia(notification: Notification): Boolean {
+        if (notification.category == Notification.CATEGORY_TRANSPORT) return true
         return notification.extras?.containsKey(Notification.EXTRA_MEDIA_SESSION) == true
     }
 
     private fun isDoNotDisturbSilent(): Boolean = runCatching {
-        notificationManager?.currentInterruptionFilter ==
-            NotificationManager.INTERRUPTION_FILTER_NONE
+        notificationManager?.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_NONE
     }.getOrDefault(false)
 
-    /**
-     * Channel importance is per-package, so it cannot be read for other apps through
-     * NotificationManager. The listener's [Ranking] carries the effective importance instead.
-     */
     private fun isLowImportance(ranking: Ranking?): Boolean =
-        (ranking?.importance ?: NotificationManager.IMPORTANCE_DEFAULT) <=
-            NotificationManager.IMPORTANCE_LOW
+        (ranking?.importance ?: NotificationManager.IMPORTANCE_DEFAULT) <= NotificationManager.IMPORTANCE_LOW
 
     private fun text(notification: Notification, key: String): String? {
-        val extras = notification.extras ?: return null
-        val value = extras.getCharSequence(key)?.toString()?.trim()
+        val value = notification.extras?.getCharSequence(key)?.toString()?.trim()
         return value?.takeIf { it.isNotEmpty() }
     }
 
-    /** Up to two actions, inline-reply first so messaging actions are always reachable. */
     private fun actions(notification: Notification): List<NotificationAction> {
         val candidates = notification.actions.orEmpty()
-            .filter { action ->
-                !action.title.isNullOrBlank() &&
-                    (action.actionIntent != null || !action.remoteInputs.isNullOrEmpty())
-            }
+            .filter { !it.title.isNullOrBlank() && it.actionIntent != null }
             .sortedByDescending { !it.remoteInputs.isNullOrEmpty() }
         return candidates.take(MAX_ACTIONS).map { action ->
             NotificationAction(
@@ -157,16 +319,16 @@ class NotificationSource(private val context: Context) {
         notification.getLargeIcon()?.let { icon ->
             runCatching { icon.loadDrawable(context) }.getOrNull()?.let { return it }
         }
-        return runCatching { packageManager.getApplicationIcon(packageName) }.getOrNull()
+        return appIcon(packageName)
     }
+
+    private fun appIcon(packageName: String): Drawable? =
+        runCatching { packageManager.getApplicationIcon(packageName) }.getOrNull()
 
     private fun appLabel(packageName: String): String = labelCache.getOrPut(packageName) {
         runCatching {
             val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                packageManager.getApplicationInfo(
-                    packageName,
-                    PackageManager.ApplicationInfoFlags.of(0L),
-                )
+                packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0L))
             } else {
                 @Suppress("DEPRECATION")
                 packageManager.getApplicationInfo(packageName, 0)
@@ -175,10 +337,30 @@ class NotificationSource(private val context: Context) {
         }.getOrDefault(packageName.substringAfterLast('.'))
     }
 
-    /** Only used to keep callers honest about the dependency; no notification is posted. */
-    @Suppress("unused")
-    private fun hasListenerAccess(): Boolean =
-        NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+    private fun pendingIntentExtra(extras: Bundle, key: String): PendingIntent? =
+        parcelableExtra(extras, key, PendingIntent::class.java)
+
+    private fun <T> parcelableExtra(extras: Bundle, key: String, type: Class<T>): T? = runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            extras.getParcelable(key, type)
+        } else {
+            @Suppress("DEPRECATION")
+            type.cast(extras.getParcelable(key))
+        }
+    }.getOrNull()
+
+    private fun IslandContent.Call.signature(): String =
+        listOf(key, caller, isIncoming, isVideo, answerIntent != null, declineIntent != null, hangUpIntent != null)
+            .joinToString("\u0000")
+
+    private fun IslandContent.Notification.signature(): String =
+        listOf(key, title, text, actions.joinToString("|") { it.title }).joinToString("\u0000")
+
+    private fun IslandContent.Download.signature(): String =
+        listOf(key, title, text, percent).joinToString("\u0000")
+
+    private fun IslandContent.Navigation.signature(): String =
+        listOf(key, instruction, detail).joinToString("\u0000")
 
     private companion object {
         const val TAG = "IslandNotifications"
@@ -186,7 +368,6 @@ class NotificationSource(private val context: Context) {
     }
 }
 
-/** Convenience for the listener: never let a malformed notification crash the binder thread. */
 internal inline fun guardNotifications(tag: String, block: () -> Unit) {
     runCatching(block).onFailure { Log.w(tag, "Dropped malformed notification", it) }
 }

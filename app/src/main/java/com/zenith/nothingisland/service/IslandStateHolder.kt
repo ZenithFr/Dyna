@@ -13,49 +13,66 @@ import kotlinx.coroutines.launch
 /**
  * Single source of truth for what the island displays.
  *
- * Two layers are kept:
- *  - **persistent**: [IslandSource.Timer] > [IslandSource.Media] > [IslandSource.Call] (the
- *    "base" state; it stays until its owner clears it — a timer is never auto-expired here);
- *  - **transient alerts**: [IslandSource.Notification] > [IslandSource.Charging], each auto-expiring
- *    after [TRANSIENT_DURATION_MS]. The highest active alert is shown, and when it expires the
- *    holder falls back to the base state automatically — that is the "restore the timer / media,
- *    else idle" rule.
- *
- * Every source owns exactly one slot, so a source can be re-posted (new track, battery percent,
- * timer tick) without disturbing the others. All mutations are serialised; the resulting [state]
- * flow is collected by [IslandService][com.zenith.nothingisland.service.IslandService].
+ * Call is the top live slot: an incoming/ongoing call is never buried by a message alert. Below it,
+ * transient confirmations (notification > charging > battery-low > power-save) auto-expire and hand
+ * back to the persistent base (timer > navigation > download > media). Every source owns one slot.
  */
 object IslandStateHolder {
-
-    /** How long a notification / charging alert stays on screen without interaction. */
     const val TRANSIENT_DURATION_MS = 4_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-
     private val _state = MutableStateFlow<IslandEvent?>(null)
     val state: StateFlow<IslandEvent?> = _state.asStateFlow()
 
-    private var timer: IslandEvent? = null
-    private var media: IslandEvent? = null
     private var call: IslandEvent? = null
     private var notification: IslandEvent? = null
     private var charging: IslandEvent? = null
+    private var batteryLow: IslandEvent? = null
+    private var powerSave: IslandEvent? = null
+    private var timer: IslandEvent? = null
+    private var navigation: IslandEvent? = null
+    private var download: IslandEvent? = null
+    private var media: IslandEvent? = null
 
     private var notificationJob: Job? = null
     private var chargingJob: Job? = null
+    private var batteryLowJob: Job? = null
+    private var powerSaveJob: Job? = null
     private var notificationGeneration = 0
     private var chargingGeneration = 0
+    private var batteryLowGeneration = 0
+    private var powerSaveGeneration = 0
+
+    private var notificationDurationMs = TRANSIENT_DURATION_MS
+    private var chargingDurationMs = TRANSIENT_DURATION_MS
+    private var batteryAlertDurationMs = TRANSIENT_DURATION_MS
 
     val current: IslandEvent? get() = _state.value
 
-    /** Persistent media state; expansion is preserved across track/progress updates. */
+    @Synchronized
+    fun updateAlertDurations(notificationMs: Long, chargingMs: Long, batteryMs: Long) {
+        notificationDurationMs = notificationMs.coerceAtLeast(500L)
+        chargingDurationMs = chargingMs.coerceAtLeast(500L)
+        batteryAlertDurationMs = batteryMs.coerceAtLeast(500L)
+    }
+
+    @Synchronized
+    fun postCall(content: IslandContent.Call, expanded: Boolean = false) {
+        call = IslandEvent(IslandSource.Call, content, expanded = call?.expanded ?: expanded)
+        publishLocked()
+    }
+
+    @Synchronized
+    fun clearCall(key: String? = null) {
+        val shown = call ?: return
+        if (key != null && (shown.content as? IslandContent.Call)?.key != key) return
+        call = null
+        publishLocked()
+    }
+
     @Synchronized
     fun postMedia(content: IslandContent.Media) {
-        media = IslandEvent(
-            source = IslandSource.Media,
-            content = content,
-            expanded = media?.expanded == true,
-        )
+        media = IslandEvent(IslandSource.Media, content, expanded = media?.expanded == true)
         publishLocked()
     }
 
@@ -66,30 +83,10 @@ object IslandStateHolder {
         publishLocked()
     }
 
-    /** Reserved for the call module; kept so the priority order is explicit. */
-    @Synchronized
-    fun postCall(content: IslandContent.Notification) {
-        call = IslandEvent(IslandSource.Call, content, expanded = call?.expanded == true)
-        publishLocked()
-    }
-
-    @Synchronized
-    fun clearCall() {
-        if (call == null) return
-        call = null
-        publishLocked()
-    }
-
-    /** Posts a notification alert for [TRANSIENT_DURATION_MS] and arms its expiry. */
     @Synchronized
     fun postNotification(content: IslandContent.Notification) {
         val generation = ++notificationGeneration
-        notification = IslandEvent(
-            source = IslandSource.Notification,
-            content = content,
-            expanded = false,
-            transient = true,
-        )
+        notification = IslandEvent(IslandSource.Notification, content, expanded = false, transient = true)
         publishLocked()
         armNotificationTimeout(generation)
     }
@@ -97,10 +94,7 @@ object IslandStateHolder {
     @Synchronized
     fun clearNotification(key: String? = null) {
         val shown = notification ?: return
-        if (key != null) {
-            val shownKey = (shown.content as? IslandContent.Notification)?.key
-            if (shownKey != key) return
-        }
+        if (key != null && (shown.content as? IslandContent.Notification)?.key != key) return
         notificationGeneration++
         notificationJob?.cancel()
         notificationJob = null
@@ -108,16 +102,10 @@ object IslandStateHolder {
         publishLocked()
     }
 
-    /** Transient charging confirmation. */
     @Synchronized
     fun postCharging(content: IslandContent.Charging) {
         val generation = ++chargingGeneration
-        charging = IslandEvent(
-            source = IslandSource.Charging,
-            content = content,
-            expanded = false,
-            transient = true,
-        )
+        charging = IslandEvent(IslandSource.Charging, content, expanded = false, transient = true)
         publishLocked()
         armChargingTimeout(generation)
     }
@@ -132,18 +120,45 @@ object IslandStateHolder {
         publishLocked()
     }
 
-    /**
-     * Persistent timer state. The timer module re-posts on every tick and clears on stop, so the
-     * holder never expires it on a wall clock — a paused timer must stay visible indefinitely.
-     * Expansion survives ticks just like media.
-     */
+    @Synchronized
+    fun postBatteryLow(content: IslandContent.BatteryLow) {
+        val generation = ++batteryLowGeneration
+        batteryLow = IslandEvent(IslandSource.BatteryLow, content, expanded = false, transient = true)
+        publishLocked()
+        armBatteryLowTimeout(generation)
+    }
+
+    @Synchronized
+    fun clearBatteryLow() {
+        batteryLowGeneration++
+        batteryLowJob?.cancel()
+        batteryLowJob = null
+        if (batteryLow == null) return
+        batteryLow = null
+        publishLocked()
+    }
+
+    @Synchronized
+    fun postPowerSave(content: IslandContent.PowerSave) {
+        val generation = ++powerSaveGeneration
+        powerSave = IslandEvent(IslandSource.PowerSave, content, expanded = false, transient = true)
+        publishLocked()
+        armPowerSaveTimeout(generation)
+    }
+
+    @Synchronized
+    fun clearPowerSave() {
+        powerSaveGeneration++
+        powerSaveJob?.cancel()
+        powerSaveJob = null
+        if (powerSave == null) return
+        powerSave = null
+        publishLocked()
+    }
+
     @Synchronized
     fun postTimer(content: IslandContent.Timer) {
-        timer = IslandEvent(
-            source = IslandSource.Timer,
-            content = content,
-            expanded = timer?.expanded == true,
-        )
+        timer = IslandEvent(IslandSource.Timer, content, expanded = timer?.expanded == true)
         publishLocked()
     }
 
@@ -154,83 +169,102 @@ object IslandStateHolder {
         publishLocked()
     }
 
-    /**
-     * Drops alerts only (used when the accessibility service re-connects). A running or paused
-     * timer is persistent state owned by
-     * [com.zenith.nothingisland.service.timer.TimerModule], so it survives a reconnect.
-     */
+    @Synchronized
+    fun postNavigation(content: IslandContent.Navigation) {
+        navigation = IslandEvent(IslandSource.Navigation, content, expanded = navigation?.expanded == true)
+        publishLocked()
+    }
+
+    @Synchronized
+    fun clearNavigation(key: String? = null) {
+        val shown = navigation ?: return
+        if (key != null && (shown.content as? IslandContent.Navigation)?.key != key) return
+        navigation = null
+        publishLocked()
+    }
+
+    @Synchronized
+    fun postDownload(content: IslandContent.Download) {
+        download = IslandEvent(IslandSource.Download, content, expanded = download?.expanded == true)
+        publishLocked()
+    }
+
+    @Synchronized
+    fun clearDownload(key: String? = null) {
+        val shown = download ?: return
+        if (key != null && (shown.content as? IslandContent.Download)?.key != key) return
+        download = null
+        publishLocked()
+    }
+
     @Synchronized
     fun clearTransient() {
         notificationGeneration++
         chargingGeneration++
+        batteryLowGeneration++
+        powerSaveGeneration++
         notificationJob?.cancel()
         chargingJob?.cancel()
+        batteryLowJob?.cancel()
+        powerSaveJob?.cancel()
         notificationJob = null
         chargingJob = null
-        val hadAlert = notification != null || charging != null
+        batteryLowJob = null
+        powerSaveJob = null
+        val hadAlert = notification != null || charging != null || batteryLow != null || powerSave != null
         notification = null
         charging = null
+        batteryLow = null
+        powerSave = null
         if (hadAlert) publishLocked()
     }
 
-    /** Full reset, e.g. when the overlay goes away (the service also stops the timer module). */
     @Synchronized
     fun clearAll() {
-        notificationGeneration++
-        chargingGeneration++
-        notificationJob?.cancel()
-        chargingJob?.cancel()
-        notificationJob = null
-        chargingJob = null
-        notification = null
-        charging = null
-        timer = null
-        media = null
+        clearTransient()
         call = null
+        timer = null
+        navigation = null
+        download = null
+        media = null
         publishLocked()
     }
 
-    /**
-     * Toggles the expanded rendering of the current event. Any interaction re-arms an alert's
-     * auto-collapse timer, so an expanded notification still returns to the previous state after
-     * [TRANSIENT_DURATION_MS] and the user is never stuck in a large pill.
-     */
     @Synchronized
     fun toggleExpanded() {
-        val event = notification ?: charging ?: timer ?: media ?: call ?: return
+        val event = current ?: return
         when (event.source) {
             IslandSource.Notification -> {
-                val next = event.copy(expanded = !event.expanded)
-                notification = next
-                // Interaction restarts the 4 s window: an alert always collapses back to the
-                // previous (timer / media / call / idle) state on its own.
+                notification = event.copy(expanded = !event.expanded)
                 armNotificationTimeout(notificationGeneration)
             }
-
+            IslandSource.Call -> call = event.copy(expanded = !event.expanded)
             IslandSource.Timer -> timer = event.copy(expanded = !event.expanded)
             IslandSource.Media -> media = event.copy(expanded = !event.expanded)
-            IslandSource.Call -> call = event.copy(expanded = !event.expanded)
-            IslandSource.Charging -> Unit // charging has no expanded layout
+            IslandSource.Navigation -> navigation = event.copy(expanded = !event.expanded)
+            IslandSource.Download -> download = event.copy(expanded = !event.expanded)
+            IslandSource.Charging, IslandSource.BatteryLow, IslandSource.PowerSave -> Unit
         }
         publishLocked()
     }
 
     @Synchronized
     fun collapse() {
+        call?.let { if (it.expanded) call = it.copy(expanded = false) }
         notification?.let { if (it.expanded) notification = it.copy(expanded = false) }
         timer?.let { if (it.expanded) timer = it.copy(expanded = false) }
+        navigation?.let { if (it.expanded) navigation = it.copy(expanded = false) }
+        download?.let { if (it.expanded) download = it.copy(expanded = false) }
         media?.let { if (it.expanded) media = it.copy(expanded = false) }
-        call?.let { if (it.expanded) call = it.copy(expanded = false) }
         publishLocked()
     }
 
     private fun armNotificationTimeout(generation: Int) {
         notificationJob?.cancel()
         notificationJob = scope.launch {
-            delay(TRANSIENT_DURATION_MS)
+            delay(notificationDurationMs)
             synchronized(this@IslandStateHolder) {
-                if (notificationGeneration != generation) return@synchronized
-                if (notification == null) return@synchronized
+                if (notificationGeneration != generation || notification == null) return@synchronized
                 notification = null
                 publishLocked()
             }
@@ -240,28 +274,42 @@ object IslandStateHolder {
     private fun armChargingTimeout(generation: Int) {
         chargingJob?.cancel()
         chargingJob = scope.launch {
-            delay(TRANSIENT_DURATION_MS)
+            delay(chargingDurationMs)
             synchronized(this@IslandStateHolder) {
-                if (chargingGeneration != generation) return@synchronized
-                if (charging == null) return@synchronized
+                if (chargingGeneration != generation || charging == null) return@synchronized
                 charging = null
                 publishLocked()
             }
         }
     }
 
-    /**
-     * Alerts sit in a transient layer above the persistent one:
-     *
-     *  - alert layer: notification > charging (auto-expire after [TRANSIENT_DURATION_MS]);
-     *  - base layer:  timer > media > call (stays until the source clears it).
-     *
-     * That is what makes a notification temporarily cover a running timer (or playing media) and
-     * hand it back afterwards. Idle is the empty publication (null), i.e. the plain shell.
-     */
+    private fun armBatteryLowTimeout(generation: Int) {
+        batteryLowJob?.cancel()
+        batteryLowJob = scope.launch {
+            delay(batteryAlertDurationMs)
+            synchronized(this@IslandStateHolder) {
+                if (batteryLowGeneration != generation || batteryLow == null) return@synchronized
+                batteryLow = null
+                publishLocked()
+            }
+        }
+    }
+
+    private fun armPowerSaveTimeout(generation: Int) {
+        powerSaveJob?.cancel()
+        powerSaveJob = scope.launch {
+            delay(batteryAlertDurationMs)
+            synchronized(this@IslandStateHolder) {
+                if (powerSaveGeneration != generation || powerSave == null) return@synchronized
+                powerSave = null
+                publishLocked()
+            }
+        }
+    }
+
     private fun publishLocked() {
-        val alert = notification ?: charging
-        val base = timer ?: media ?: call
+        val alert = call ?: notification ?: charging ?: batteryLow ?: powerSave
+        val base = timer ?: navigation ?: download ?: media
         _state.value = alert ?: base
     }
 }

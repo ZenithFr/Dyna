@@ -9,12 +9,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -45,6 +47,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -75,6 +79,7 @@ import kotlin.math.roundToInt
 fun HomeScreen(
     settings: IslandSettings,
     serviceEnabled: Boolean,
+    islandRunning: Boolean,
     notificationListenerEnabled: Boolean,
     batteryOptimizationIgnored: Boolean,
     overlayGranted: Boolean,
@@ -102,7 +107,7 @@ fun HomeScreen(
         Header()
 
         Spacer(Modifier.height(24.dp))
-        ServiceStatusCard(serviceEnabled)
+        ServiceStatusCard(enabled = serviceEnabled, running = islandRunning)
 
         Spacer(Modifier.height(36.dp))
         SectionLabel("Setup")
@@ -129,6 +134,31 @@ fun HomeScreen(
             onToggle = onTimerToggle,
             onStop = onTimerStop,
         )
+
+        Spacer(Modifier.height(36.dp))
+        SectionLabel("Sources")
+        Spacer(Modifier.height(10.dp))
+        SourcesPanel(settings = settings, onSettingsChange = onSettingsChange)
+
+        Spacer(Modifier.height(36.dp))
+        SectionLabel("Alerts & privacy")
+        Spacer(Modifier.height(10.dp))
+        AlertsPrivacyPanel(settings = settings, onSettingsChange = onSettingsChange)
+
+        Spacer(Modifier.height(36.dp))
+        SectionLabel("App integrations")
+        Spacer(Modifier.height(10.dp))
+        IntegrationsPanel(settings = settings, onSettingsChange = onSettingsChange)
+
+        Spacer(Modifier.height(36.dp))
+        SectionLabel("Motion & performance")
+        Spacer(Modifier.height(10.dp))
+        MotionPerformancePanel(settings = settings, onSettingsChange = onSettingsChange)
+
+        Spacer(Modifier.height(36.dp))
+        SectionLabel("Expanded card & colours")
+        Spacer(Modifier.height(10.dp))
+        ExpandedAppearancePanel(settings = settings, onSettingsChange = onSettingsChange)
 
         Spacer(Modifier.height(36.dp))
         SectionLabel("Camera hole")
@@ -190,7 +220,7 @@ private fun Header() {
 }
 
 @Composable
-private fun ServiceStatusCard(enabled: Boolean) {
+private fun ServiceStatusCard(enabled: Boolean, running: Boolean) {
     val shape = RoundedCornerShape(28.dp)
     Row(
         modifier = Modifier
@@ -201,29 +231,33 @@ private fun ServiceStatusCard(enabled: Boolean) {
             .padding(horizontal = 20.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        StatusDot(if (enabled) NothingRed else Color(0xFF2A2A2A))
+        StatusDot(if (running) NothingRed else Color(0xFF2A2A2A))
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                text = if (enabled) "ISLAND ACTIVE" else "ISLAND OFFLINE",
+                text = when {
+                    running -> "ISLAND ACTIVE"
+                    enabled -> "ISLAND STARTING"
+                    else -> "ISLAND OFFLINE"
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = NothingWhite,
             )
             Spacer(Modifier.height(3.dp))
             Text(
-                text = if (enabled) {
-                    "The accessibility overlay is running."
-                } else {
-                    "Enable the accessibility service to start."
+                text = when {
+                    running -> "The accessibility overlay is running."
+                    enabled -> "Accessibility is enabled; waiting for the overlay service."
+                    else -> "Enable the accessibility service to start."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = NothingMuted,
             )
         }
         Text(
-            text = if (enabled) "LIVE" else "OFF",
+            text = if (running) "LIVE" else "OFF",
             style = MaterialTheme.typography.labelSmall,
-            color = if (enabled) NothingRed else NothingMuted,
+            color = if (running) NothingRed else NothingMuted,
         )
     }
 }
@@ -354,12 +388,13 @@ private fun TimerPanel(
 
         Spacer(Modifier.height(16.dp))
         if (timer == null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TimerPresetMinutes.forEach { minutes ->
                     TimerPresetChip(
                         minutes = minutes,
                         selected = minutes == selectedMinutes,
                         onClick = { onSelectMinutes(minutes) },
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
@@ -432,15 +467,19 @@ private fun TimerStatus(timer: IslandContent.Timer?) {
 }
 
 @Composable
-private fun TimerPresetChip(minutes: Int, selected: Boolean, onClick: () -> Unit) {
+private fun TimerPresetChip(minutes: Int, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
-        Modifier
+        modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
             .clip(CircleShape)
             .background(if (selected) NothingRed else Color.Transparent)
             .border(1.dp, if (selected) NothingRed else NothingHairline, CircleShape)
             .clickable(onClick = onClick)
-            .semantics { contentDescription = "$minutes minute timer" }
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .semantics {
+                contentDescription = "$minutes minute timer"
+                this.selected = selected
+            },
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             text = "${minutes}m",
@@ -456,6 +495,7 @@ private fun TimerPresetChip(minutes: Int, selected: Boolean, onClick: () -> Unit
  * so the running service follows the drag live.
  */
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun CameraHolePanel(
     settings: IslandSettings,
     onSettingsChange: ((IslandSettings) -> IslandSettings) -> Unit,
@@ -501,10 +541,10 @@ private fun CameraHolePanel(
                 color = NothingMuted,
             )
             Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HoleModeChip("Ratio", IslandHoleMode.RATIO, settings, onSettingsChange, Modifier.weight(1f))
-                HoleModeChip("One side", IslandHoleMode.ONE_SIDE, settings, onSettingsChange, Modifier.weight(1f))
-                HoleModeChip("Equal split", IslandHoleMode.SYMMETRIC, settings, onSettingsChange, Modifier.weight(1f))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HoleModeChip("Ratio", IslandHoleMode.RATIO, settings, onSettingsChange)
+                HoleModeChip("One side", IslandHoleMode.ONE_SIDE, settings, onSettingsChange)
+                HoleModeChip("Equal split", IslandHoleMode.SYMMETRIC, settings, onSettingsChange)
             }
 
             if (settings.holeMode == IslandHoleMode.ONE_SIDE) {
@@ -515,9 +555,9 @@ private fun CameraHolePanel(
                     color = NothingMuted,
                 )
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    HoleSideChip("Left", IslandHoleSide.LEFT, settings, onSettingsChange, Modifier.weight(1f))
-                    HoleSideChip("Right", IslandHoleSide.RIGHT, settings, onSettingsChange, Modifier.weight(1f))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HoleSideChip("Left", IslandHoleSide.LEFT, settings, onSettingsChange)
+                    HoleSideChip("Right", IslandHoleSide.RIGHT, settings, onSettingsChange)
                 }
             }
 
@@ -605,12 +645,16 @@ private fun HoleModeChip(
     val selected = settings.holeMode == mode
     Box(
         modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
             .clip(CircleShape)
             .background(if (selected) NothingRed else Color.Transparent)
             .border(1.dp, if (selected) NothingRed else NothingHairline, CircleShape)
             .clickable { onSettingsChange { it.copy(holeMode = mode) } }
-            .semantics { contentDescription = "$label hole mode" }
-            .padding(vertical = 9.dp),
+            .semantics {
+                contentDescription = "$label hole mode"
+                this.selected = selected
+            }
+            .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -632,12 +676,16 @@ private fun HoleSideChip(
     val selected = settings.holeSide == side
     Box(
         modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
             .clip(CircleShape)
             .background(if (selected) NothingRed else Color.Transparent)
             .border(1.dp, if (selected) NothingRed else NothingHairline, CircleShape)
             .clickable { onSettingsChange { it.copy(holeSide = side) } }
-            .semantics { contentDescription = "$label hole side" }
-            .padding(vertical = 9.dp),
+            .semantics {
+                contentDescription = "$label hole side"
+                this.selected = selected
+            }
+            .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -682,6 +730,13 @@ private fun HolePreview(
         val widthPx = with(density) { maxWidth.toPx() }
         val scale = (widthPx / screenWidthDp.coerceAtLeast(1)).coerceAtLeast(0.05f)
         val densityValue = density.density
+        val pillPath = remember { android.graphics.Path() }
+        val labelPaint = remember(densityValue) {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+                textSize = 10f * densityValue
+            }
+        }
 
         Canvas(
             Modifier
@@ -723,7 +778,6 @@ private fun HolePreview(
             val pillY = (if (settings.islandShape == IslandShape.PILL) settings.offsetYDp else 0) * scale
             val corner = settings.cornerRadiusDp * scale
 
-            val pillPath = android.graphics.Path()
             buildIslandPath(pillPath, settings.islandShape, pillW, pillH, corner)
             // Place the shape where the real overlay sits; without this it renders at (0,0)
             // and looks stuck to the card's left edge.
@@ -762,10 +816,6 @@ private fun HolePreview(
                 1f * densityValue,
             )
 
-            val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = android.graphics.Color.WHITE
-                textSize = 10f * densityValue
-            }
             val labelText = "hole"
             // Keep the label inside the card when the hole sits near the right edge.
             val labelWidth = labelPaint.measureText(labelText)
@@ -878,8 +928,8 @@ private fun CalibrationPanel(
         HorizontalDivider(color = NothingHairline, thickness = 1.dp)
         ToggleRow(
             title = "Motion at 120 Hz",
-            description = "Expand, retract, activity swaps and incoming text run at the panel's " +
-                "fastest rate while they move, then drop back to idle. Off caps them at 90 Hz.",
+            description = "On Android 15+, motion requests 120 Hz while moving and drops to 0 at rest. " +
+                "Off requests 90 Hz. Android 12–14 follows the panel's normal vsync.",
             checked = settings.highQualityMotion,
             onCheckedChange = { checked -> onSettingsChange { it.copy(highQualityMotion = checked) } },
         )
@@ -974,11 +1024,15 @@ private fun ShapeChip(
     val selected = settings.islandShape == shape
     Box(
         modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
             .clip(CircleShape)
             .background(if (selected) NothingRed else Color.Transparent)
             .border(1.dp, if (selected) NothingRed else NothingHairline, CircleShape)
             .clickable { onSettingsChange { it.copy(islandShape = shape) } }
-            .semantics { contentDescription = "$label island shape" }
+            .semantics {
+                contentDescription = "$label island shape"
+                this.selected = selected
+            }
             .padding(vertical = 9.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -1002,6 +1056,7 @@ private val StrokeSwatchOptions = listOf(
 )
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun StrokeColorRow(
     settings: IslandSettings,
     onSettingsChange: ((IslandSettings) -> IslandSettings) -> Unit,
@@ -1021,10 +1076,10 @@ private fun StrokeColorRow(
             )
         }
         Spacer(Modifier.height(12.dp))
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             StrokeSwatchOptions.forEach { option ->
                 StrokeSwatch(
@@ -1044,16 +1099,19 @@ private fun StrokeColorRow(
 private fun StrokeSwatch(label: String, color: Color, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
-            .size(32.dp)
+            .size(48.dp)
             .clip(CircleShape)
             .clickable(onClick = onClick)
-            .semantics { contentDescription = label }
+            .semantics {
+                contentDescription = label
+                this.selected = selected
+            }
             .border(
                 width = if (selected) 2.dp else 1.dp,
                 color = if (selected) NothingWhite else NothingHairline,
                 shape = CircleShape,
             )
-            .padding(4.dp)
+            .padding(6.dp)
             .clip(CircleShape)
             .background(color),
     )
@@ -1188,7 +1246,7 @@ private fun DrawScope.drawIslandShell(
 }
 
 @Composable
-private fun CalibrationSlider(
+internal fun CalibrationSlider(
     label: String,
     value: Int,
     range: IntRange,
@@ -1230,6 +1288,7 @@ private fun CalibrationSlider(
             )
         }
         Slider(
+            modifier = Modifier.semantics { contentDescription = label },
             value = draft,
             onValueChange = { newValue ->
                 dragging = true
@@ -1254,7 +1313,7 @@ private fun CalibrationSlider(
 }
 
 @Composable
-private fun ToggleRow(
+internal fun ToggleRow(
     title: String,
     description: String,
     checked: Boolean,
@@ -1263,6 +1322,7 @@ private fun ToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
             .padding(horizontal = 20.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1282,7 +1342,7 @@ private fun ToggleRow(
         Spacer(Modifier.width(12.dp))
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = null,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = NothingBlack,
                 checkedTrackColor = NothingRed,
@@ -1296,7 +1356,7 @@ private fun ToggleRow(
 }
 
 @Composable
-private fun SectionLabel(text: String) {
+internal fun SectionLabel(text: String) {
     Text(
         text = text.uppercase(),
         style = MaterialTheme.typography.labelSmall,
@@ -1372,6 +1432,7 @@ private fun SetupItem(
             if (primary) {
                 Button(
                     onClick = onClick,
+                    modifier = Modifier.defaultMinSize(minHeight = 48.dp),
                     shape = CircleShape,
                     contentPadding = contentPadding,
                     colors = ButtonDefaults.buttonColors(
@@ -1410,6 +1471,6 @@ private fun ActionLabel(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelSmall,
-        color = NothingWhite,
+        color = LocalContentColor.current,
     )
 }

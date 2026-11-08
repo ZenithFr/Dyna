@@ -4,67 +4,102 @@ An open-source **Dynamic Island overlay for Nothing OS**, built with Kotlin + Je
 It draws a black pill at the top of the screen using a classic `AccessibilityService` overlay
 window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
 
-> Status: **v0.4.0**. The island shell, onboarding and calibration work, it reacts to media
-> sessions, notifications and charging, ships a full countdown timer, and now places itself
-> around the physical camera punch-hole with three calibration modes and two shell shapes
-> (pill / notch). Portrait lock keeps it pinned to the portrait top-centre anchor in
-> landscape apps and fullscreen video.
+> Status: **v0.4.0+**. The island shell, onboarding and calibration work, it reacts to media
+> sessions, notifications, calls, charging/battery/power-save, downloads and maps navigation,
+> ships a full countdown timer, and places itself around
+> the physical camera punch-hole with three calibration modes and two shell shapes (pill / notch).
+> Compact content flanks the lens; expanded cards use Apple-style leading/trailing continuity and
+> a full-width control region **below** the lens. Portrait lock keeps the portrait top-centre
+> anchor in landscape apps and fullscreen video. Tap-to-expand and single-active-source priority
+> remain the documented Android behaviour; this is not a claim of pixel-identical iPhone parity.
 
 ## What works today
 
 - Accessibility overlay window (`TYPE_ACCESSIBILITY_OVERLAY`, `TRANSLUCENT`, top-centre pill).
-- **Media**: the active `MediaSession` is mirrored with album art (≤128 px), animated playing
-  bars in the compact pill, and title/artist, prev/play-pause/next and a progress line when
-  expanded. Buttons call `MediaController.TransportControls`; updates arrive through
-  `MediaController.Callback` (no polling).
+- **Media**: the active `MediaSession` is mirrored with album art (≤128 px) and playing bars in
+  the compact pill. Expanded: artwork/title/artist and an artwork-tinted waveform above a progress
+  row and unboxed prev/play-pause/next controls, all below the lens. Unsupported transport actions
+  are disabled. Buttons call `MediaController.TransportControls`; updates arrive through
+  `MediaController.Callback` (no polling). Artwork is downscaled and sampled for accent color only
+  when its identity changes.
 - **Notifications**: an alerting notification shows the app icon + title for 4 s; tap to expand
-  for title, text and up to two actions (inline reply included). Filtering skips ongoing,
+  for title, text and up to two actions below the lens (inline reply included). Private/secret
+  notifications are redacted or skipped while the keyguard is locked. Filtering skips ongoing,
   group-summary, low-importance, media/call and own-package notifications, and anything while
-  Do Not Disturb is set to *none*. When the alert expires the island falls back to a running
-  timer, then media, else idle.
-- **Charging**: plugging in shows a transient bolt + `xx%` card (and a `FULL` card at 100 %),
-  driven by the power broadcast + sticky battery intent — no polling.
+  Do Not Disturb is set to *none*. If the reply overlay cannot take focus, the conversation's
+  content intent is opened instead of sending a result-less reply intent. When the alert expires
+  the island falls back to a running timer, then media, else idle.
+- **Calls**: `Notification.CallStyle` incoming/ongoing calls surface above everything else, with
+  answer/decline/end controls and optional auto-expand. No Shizuku or telecom role is required.
+- **Charging / battery**: plug-in shows a green bolt + `xx%` (`FULL` at 100 %); crossing the
+  configurable low-battery threshold shows a low card; power-save mode changes show a saver card.
+  Driven by public power/battery broadcasts + sticky battery intent — no polling.
+- **Downloads / Live Update-style progress**: progress notifications (including Android 15
+  `ProgressStyle`-compatible `android.progress*` extras) become a persistent download card with
+  percent/indeterminate progress, open and cancel actions.
+- **Maps / navigation**: navigation-category notifications and known maps packages become a
+  turn-by-turn card with an open-maps action. This is a public-notification integration, not a
+  private Google Maps/Waze SDK hook.
 - **Timer**: a persistent countdown that outranks media/call on the base layer. Start 1/5/10/25
-  minute presets from the app; the compact pill always shows `mm:ss` (plus a pause glyph while
-  frozen), tap to expand for the label, a large `mm:ss` and pause/resume + stop buttons. Time is
+  minute presets from the app; the compact pill shows an orange timer/pause glyph + `mm:ss`.
+  Tap to expand for circular pause/resume + cancel controls leading and a large orange `mm:ss`
+  trailing, below the lens. Time is
   derived from `SystemClock.elapsedRealtime`, so ticks never drift; a finished timer shows
   `TIME'S UP` / `00:00` for 4 s before clearing. Notifications and charging still layer above it
   and hand it back when they expire.
 - **Camera hole**: the overlay knows where the physical punch-hole is (defaults: screen centre,
-  26 dp down, 8 dp radius) and splits content into the two areas beside it — media art left /
-  bars right, notification icon left / title right, timer and charging centred in the wider side.
-  Three placement modes: **Equal split** (hole at the body centre), **Ratio** (hole at 20–50 % of
-  the width) and **One side** (hole flush with the left or right edge). A draggable circle in the
-  app calibrates it, **DETECT CUTOUT** reads the platform cutout, and a red ring guide can be
-  shown on the real island for lens alignment.
+  26 dp down, 8 dp radius). Compact content is split into leading/trailing areas beside it — media
+  art left / bars right, notification icon left / title right, timer glyph left / time right,
+  charging bolt left / percentage right. Expanded content reserves a sensor-safe top row and then
+  uses the full width below the lens; an unusually low/large calibrated lens grows the card instead
+  of covering the lens. Three placement modes: **Equal split** (hole at the body centre), **Ratio**
+  (hole at 20–50 % of the width in the UI) and **One side** (hole flush with the left or right
+  edge). A draggable circle in the app calibrates it, **DETECT CUTOUT** reads the platform cutout,
+  and a red ring guide can be shown on the real island for lens alignment.
 - **Island shape**: **pill** or **notch** (flat top, rounded bottom, hanging from the bezel).
   The notch is pinned to the top edge; the pill keeps the vertical-offset slider.
-- **Motion** (system Dynamic Island behaviour, rebuilt for a punch-hole screen): expanding and
-  retracting is a two-spring morph — the width leads and the height trails it by ~100 ms, so the
-  shell stretches sideways first and then pours into the expanded card, and squishes back the same
-  way. The compact and expanded layouts crossfade with a 6 % scale and a few dp of rise, the shell
-  always leads the content, and switching activities (timer → notification) crossfades instead of
-  hard-cutting. Hit targets only exist at rest. Motion asks the panel for **120 Hz** while it runs
-  and drops the request to 0 when the island is still.
+- **Motion** (Apple Dynamic Island behaviour, rebuilt for a punch-hole screen): expanding and
+  retracting is a two-spring morph — the width leads and the height trails it, so the shell
+  stretches sideways first and then pours into the expanded card. The spring step is closed-form,
+  so 60 Hz and 120 Hz follow the same trajectory; reversing a morph preserves velocity. Compact and
+  expanded layouts crossfade with a 6 % scale and a few dp of rise, activity swaps crossfade, and
+  notification text uses a whole-line replacement (no per-glyph shaping breakage). Hit targets only
+  exist at rest; drags, secondary pointers and cancels cannot fire a tap. The system animator scale
+  is respected (`0` snaps without spatial motion). On Android 15+ motion requests **120 Hz** (90 Hz
+  when the high-quality switch is off) and drops the request to 0 at rest; Android 12–14 follows the
+  panel's normal vsync because the per-view frame-rate API is unavailable.
 - **Idle contraction**: with nothing to show — no notification, media, timer or charging — the
   shell curls up into the camera-hole circle after a **1 s** delay (configurable 1–10 s in the
   calibration panel). Pausing a track or letting an alert expire hands the island back to idle, so
   it disappears into the lens instead of lingering; new activity cancels the countdown and springs
   the shell back out. The curl is a ~420 ms spring on the same 120 Hz motion path as the expand /
-  retract morph (measured 8.3 ms per frame on device), not a one-frame pop. It is staged rather
+  retract morph, not a one-frame pop. It is staged rather
   than uniform: over half of the width is gone before the height moves at all, then the height
   flattens while the rest of the width closes, so the shell slides up into the lens instead of
   shrinking around its own centre.
 - **Portrait lock** (default on): geometry is always computed from the portrait display width,
   so landscape games/video never resize, rotate or move the island. The app itself is locked to
   portrait. Turn the switch off for rotation-aware behaviour.
+- **Customization**: every source can be switched off; alert holds, battery threshold, lockscreen
+  redaction and call auto-expand are configurable; expanded width/corner/margins/lens clearance/text
+  scale are sliders; motion has a 120 Hz morph hint, separate ambient loop rate and speed scale;
+  each source accent has swatches + hex entry. Popular apps can be opted out per package.
 - Onboarding checklist with live grant status for the accessibility service, notification
-  listener, battery optimisation and overlay permission.
+  listener, battery optimisation and overlay permission. Settings controls use Material 3 with
+  48 dp touch targets, wrapping chip rows and whole-row switches; the canvas island exposes its
+  rest-state controls to TalkBack as virtual buttons.
 - Calibration sliders persisted with **DataStore Preferences**: horizontal/vertical offset,
   width, height, corner radius and the portrait-lock switch. Every change updates the overlay
   live because the service collects the same DataStore `Flow`.
-- "Hide in fullscreen" preference persisted as a stub (no enforcement yet).
+- "Hide in fullscreen" preference persisted as a stub (no enforcement yet). The service keeps
+  `canRetrieveWindowContent=false`; it does not inspect window content to guess fullscreen state.
 - Adaptive launcher icon: black background, white pill, red dot.
+
+## Target device
+
+Primary target: **CMF Phone 2 Pro** — 1080×2392 AMOLED, 120 Hz, centered punch-hole, Android 15.
+Use **DETECT CUTOUT** and the red guide to calibrate the physical lens; geometry is dp-based and
+clamped to the display. See `docs/FEATURE_PLAN.md` for the Apple parity matrix and performance budget.
 
 ## Requirements
 
@@ -187,7 +222,7 @@ clamped to safe ranges:
 | --- | --- | --- |
 | Horizontal offset | −24 … +24 dp | 0 dp |
 | Vertical offset | 0 … 24 dp | 6 dp |
-| Width | 28 … 160 dp | 110 dp |
+| Width | 28 … 300 dp (clamped to screen) | 110 dp |
 | Height | 24 … 48 dp | 32 dp |
 | Corner radius | 8 … 24 dp | 16 dp |
 | Portrait lock | on/off | on |
@@ -197,15 +232,27 @@ clamped to safe ranges:
 | Hole Y (from screen top) | 0 … 60 dp | 26 dp |
 | Hole radius | 4 … 20 dp | 8 dp |
 | Hole mode | Equal split / Ratio / One side | Equal split |
-| Hole ratio (ratio mode) | 20 … 50 % small side | 35 % |
+| Hole ratio (ratio mode) | 20 … 50 % UI (20 … 80 % stored) | 35 % |
 | Hole side (one-side mode) | Left / Right | Left |
 | Guide on screen | on/off | off |
 | Island shape | Pill / Notch | Pill |
 | Idle contraction delay | 1 … 10 s | 1 s |
+| Motion at 120 Hz | on/off (Android 15+ hint) | on |
+| Outline | on/off | on |
+| Stroke width | 1 … 5 dp | 1 dp |
+| Stroke color | RRGGBB / swatches | 15 % white |
+
+Expanded cards are content-aware, not a fixed 84 dp box: media uses a two-row Now Playing layout,
+timer uses a short control row, and notifications grow when actions are present. Width follows the
+Apple screen classes where they fit (371 dp on a 393 dp screen, capped at 408 dp) and is clamped on
+narrow displays. The compact width remains the calibrated value above.
 
 ## Test
 
 ```bash
+# Local regression tests (layout, spring math, source priority/expiry, media extrapolation)
+mise exec java@openjdk-21 -- ./gradlew testDebugUnitTest
+
 # 0. Build + install
 mise exec java@openjdk-21 -- ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
@@ -218,7 +265,8 @@ adb shell cmd notification allow_listener \
   com.zenith.nothingisland/com.zenith.nothingisland.service.notification.IslandNotificationListener
 
 # 2. Media: play a track, then tap the pill
-#    compact = album art + animated bars, expanded = title/artist + transport + progress
+#    compact = album art + animated bars; expanded = artwork/title/waveform + progress + transport
+#    below the lens. Unsupported transport buttons must be disabled.
 adb shell am start -a android.intent.action.VIEW -d https://music.youtube.com
 
 # 3. Notification: post a synthetic alert
@@ -228,7 +276,7 @@ adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the 
 # 4. Charging: plug/unplug. Expect a 4s bolt + percentage card; at 100% it reads FULL.
 
 # 5. Timer: open the app, pick a preset (1/5/10/25 min) and press START.
-#    Compact pill counts down mm:ss; tap it to expand (label, big mm:ss, pause/resume, stop).
+#    Compact pill shows timer/pause glyph + mm:ss; tap for circular pause/resume + cancel and big time.
 #    Pause holds the remaining time; resume continues. Let it finish: TIME'S UP / 00:00 for ~4s,
 #    then it clears and falls back to media, else idle. A notification during the countdown must
 #    cover the timer for 4s and then hand it back still running.
@@ -247,6 +295,11 @@ adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the 
 #    notification or resuming music must spring it straight back out. Check the log:
 #    adb logcat -s IslandOverlay   # "apply content=null" then the contraction
 
+# 9. Gesture/accessibility: press and drag off a control, add a second finger, cancel the gesture:
+#    no action may fire. With TalkBack, focus the island and activate transport/timer/notification
+#    buttons. Set animator duration scale to 0 and verify state changes snap without spatial motion.
+#    Check long titles, RTL/emoji titles, font scale 1.3, and a low/large calibrated lens.
+
 # Logs
 adb logcat -s IslandOverlay IslandService IslandMedia IslandNotifications IslandCharging IslandReply IslandHole
 ```
@@ -258,8 +311,10 @@ app/src/main/java/com/zenith/nothingisland/
 ├── MainActivity.kt                       # Compose host, intents, grant polling
 ├── data/IslandSettings.kt                # settings model + DataStore repository
 ├── data/HoleGeometry.kt                  # hole model, mode placement, island shape paths
-├── overlay/IslandOverlay.kt              # window, hole-aware geometry, portrait lock
-├── overlay/IslandPillView.kt             # canvas renderer, hole avoidance, tap targets
+├── overlay/IslandOverlay.kt              # window, hole-aware geometry, portrait lock, a11y nodes
+├── overlay/IslandLayout.kt               # Apple-style compact/expanded layout rules
+├── overlay/IslandMotion.kt               # frame-rate-independent spring/easing math
+├── overlay/IslandPillView.kt             # canvas renderer, hole avoidance, gesture targets
 ├── overlay/IslandInteraction.kt          # tap callbacks / transport commands
 ├── overlay/IslandReplyWindow.kt          # focusable inline-reply overlay
 ├── service/IslandService.kt              # AccessibilityService, renders the holder
@@ -271,14 +326,19 @@ app/src/main/java/com/zenith/nothingisland/
 ├── service/timer/TimerModule.kt          # countdown controller (tick, pause/resume/stop)
 ├── ui/HomeScreen.kt                      # onboarding + timer + calibration UI
 ├── ui/theme/                             # black/white/red Nothing palette
-└── util/ServiceStatus.kt                 # grant checks
+├── util/ServiceStatus.kt                 # grant checks
+app/src/test/java/com/zenith/nothingisland/ # local layout/motion/state regression tests
 ```
 
 ## Roadmap
 
-1. **Fullscreen rule** — honour `hideInFullscreen` with `TYPE_WINDOW_STATE_CHANGED`.
+1. **Fullscreen rule** — honour `hideInFullscreen` without broadening window-content access.
 2. **Call module** — reserve the `Call` priority slot with an ongoing-call state.
-3. **Glyph / Nothing integrations** — optional, keep them behind feature flags.
+3. **Minimal/detached presentation** — Apple's two-activity minimal layout; the current holder
+   intentionally publishes one active source using the documented priority order.
+4. **Gesture mode** — optional Apple-style tap-to-open / long-press-to-expand.
+5. **Optional Shizuku module** — only for OS state with no public API; never required for core features.
+6. **Glyph / Nothing integrations** — optional, keep them behind feature flags.
 
 ## License
 

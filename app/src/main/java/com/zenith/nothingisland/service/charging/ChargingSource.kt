@@ -4,61 +4,112 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.zenith.nothingisland.data.IslandSettings
+import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandStateHolder
 
 /**
- * Service-owned receiver for the sticky `ACTION_BATTERY_CHANGED` broadcast: it supplies the level
- * and plug type on registration and on every change, which is how the percentage stays current
- * without polling. Plug/unplug itself is also delivered by the manifest [ChargingReceiver].
+ * Battery / power-save source. Uses only public sticky battery + power-save broadcasts; no Shizuku
+ * or privileged shell is needed for these states. Charging plug events are shared with the manifest
+ * receiver through [ChargingEvents].
  */
 class ChargingSource(private val context: Context) {
 
-    private var receiver: BroadcastReceiver? = null
+    private var batteryReceiver: BroadcastReceiver? = null
+    private var powerSaveReceiver: BroadcastReceiver? = null
     private var started = false
+    private var settings = IslandSettings()
+    private var lastLevel = -1
+    private var lowAlerted = false
+    private val powerManager: PowerManager? = context.getSystemService(PowerManager::class.java)
+
+    fun updateSettings(next: IslandSettings) {
+        settings = next.coerced()
+        ChargingEvents.chargingEnabled = settings.chargingEnabled
+        if (!settings.chargingEnabled) IslandStateHolder.clearCharging()
+        if (!settings.batteryLowEnabled) IslandStateHolder.clearBatteryLow()
+        if (!settings.powerSaveEnabled) IslandStateHolder.clearPowerSave()
+    }
 
     fun start() {
         if (started) return
-        // Read the sticky value first so the immediate replay on registerReceiver is not mistaken
-        // for a fresh plug event (no spurious "82%" card whenever the service reconnects).
-        ChargingEvents.prime(
-            runCatching { context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
-                .getOrNull(),
-        )
+        val sticky = runCatching {
+            context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        }.getOrNull()
+        ChargingEvents.prime(sticky)
+        lastLevel = sticky?.levelPercent() ?: -1
+        lowAlerted = lastLevel in 0..settings.batteryLowThresholdPercent
 
-        val next = object : BroadcastReceiver() {
+        val battery = object : BroadcastReceiver() {
             override fun onReceive(receiverContext: Context?, intent: Intent?) {
                 if (intent?.action != Intent.ACTION_BATTERY_CHANGED) return
-                runCatching { ChargingEvents.onBatteryChanged(context, intent) }
-                    .onFailure { Log.w(TAG, "Battery update failed", it) }
+                runCatching {
+                    ChargingEvents.onBatteryChanged(context, intent)
+                    maybeBatteryLow(intent.levelPercent())
+                }.onFailure { Log.w(TAG, "Battery update failed", it) }
             }
         }
-        receiver = next
+        val powerSave = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                if (intent?.action != PowerManager.ACTION_POWER_SAVE_MODE_CHANGED) return
+                runCatching {
+                    if (settings.powerSaveEnabled) {
+                        IslandStateHolder.postPowerSave(
+                            IslandContent.PowerSave(powerManager?.isPowerSaveMode == true),
+                        )
+                    }
+                }.onFailure { Log.w(TAG, "Power-save update failed", it) }
+            }
+        }
+        batteryReceiver = battery
+        powerSaveReceiver = powerSave
         runCatching {
-            // Explicit non-exported registration: ACTION_BATTERY_CHANGED is a protected system
-            // broadcast, so the flag is accepted on every API level (and required on 34+).
             ContextCompat.registerReceiver(
-                context,
-                next,
-                IntentFilter(Intent.ACTION_BATTERY_CHANGED),
-                ContextCompat.RECEIVER_NOT_EXPORTED,
+                context, battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            ContextCompat.registerReceiver(
+                context, powerSave, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED,
             )
         }.onSuccess {
             started = true
         }.onFailure {
-            Log.w(TAG, "Unable to register battery receiver", it)
-            receiver = null
+            Log.w(TAG, "Unable to register battery/power-save receivers", it)
+            stop()
         }
     }
 
     fun stop() {
-        val current = receiver ?: return
-        receiver = null
         started = false
-        runCatching { context.unregisterReceiver(current) }
-            .onFailure { Log.w(TAG, "Battery receiver already unregistered", it) }
+        batteryReceiver?.let { runCatching { context.unregisterReceiver(it) } }
+        powerSaveReceiver?.let { runCatching { context.unregisterReceiver(it) } }
+        batteryReceiver = null
+        powerSaveReceiver = null
         IslandStateHolder.clearCharging()
+        IslandStateHolder.clearBatteryLow()
+        IslandStateHolder.clearPowerSave()
+    }
+
+    private fun maybeBatteryLow(level: Int) {
+        if (level < 0) return
+        val threshold = settings.batteryLowThresholdPercent
+        if (level > threshold) {
+            lowAlerted = false
+        } else if (!lowAlerted && settings.batteryLowEnabled) {
+            lowAlerted = true
+            IslandStateHolder.postBatteryLow(IslandContent.BatteryLow(level))
+        }
+        lastLevel = level
+    }
+
+    private fun Intent.levelPercent(): Int {
+        val raw = getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+        if (raw < 0 || scale <= 0) return -1
+        return (raw * 100f / scale).toInt().coerceIn(0, 100)
     }
 
     private companion object {

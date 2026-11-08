@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -16,10 +17,11 @@ import kotlinx.coroutines.flow.map
 import java.io.IOException
 
 /**
- * Immutable snapshot of every calibration knob. All values are density-independent pixels.
+ * Immutable snapshot of every user-facing island knob. Geometry is in dp unless noted.
  *
- * The service renders straight from this object, so adding a knob here + a DataStore key is all
- * that a new visual parameter needs.
+ * The service and the notification listener collect the same DataStore flow, so a change in the
+ * app reaches the overlay and the source filters without a restart. New keys are additive: older
+ * preference files keep loading through the defaults below.
  */
 data class IslandSettings(
     val offsetXDp: Int = DEFAULT_OFFSET_X_DP,
@@ -27,46 +29,65 @@ data class IslandSettings(
     val widthDp: Int = DEFAULT_WIDTH_DP,
     val heightDp: Int = DEFAULT_HEIGHT_DP,
     val cornerRadiusDp: Int = DEFAULT_CORNER_RADIUS_DP,
-    /** Outline of the pill. [strokeWidthDp] and [strokeColorArgb] only apply while this is true. */
     val strokeEnabled: Boolean = DEFAULT_STROKE_ENABLED,
     val strokeWidthDp: Int = DEFAULT_STROKE_WIDTH_DP,
-    /** ARGB int; the default is the original 15% white hairline (0x26FFFFFF). */
     val strokeColorArgb: Int = DEFAULT_STROKE_COLOR_ARGB,
     val hideInFullscreen: Boolean = DEFAULT_HIDE_IN_FULLSCREEN,
-    /**
-     * Keeps the island anchored to the portrait top-centre: its geometry is always derived from
-     * the natural (portrait) display width, so landscape apps and fullscreen video do not resize
-     * or re-anchor it. Rotation-aware behaviour is used when this is false.
-     */
     val lockPortrait: Boolean = DEFAULT_LOCK_PORTRAIT,
-    /** When true the overlay places itself relative to the physical camera hole and avoids it. */
     val holeEnabled: Boolean = DEFAULT_HOLE_ENABLED,
-    /** Horizontal hole offset from the portrait screen centre. */
     val holeCenterXDp: Int = DEFAULT_HOLE_CENTER_X_DP,
-    /** Hole centre measured down from the portrait screen top. */
     val holeCenterYDp: Int = DEFAULT_HOLE_CENTER_Y_DP,
     val holeRadiusDp: Int = DEFAULT_HOLE_RADIUS_DP,
     val holeMode: IslandHoleMode = DEFAULT_HOLE_MODE,
-    /** Hole position from the pill's left edge (20..80); only used by [IslandHoleMode.RATIO]. */
     val holeRatioPercent: Int = DEFAULT_HOLE_RATIO_PERCENT,
-    /** Edge that carries the hole; only used by [IslandHoleMode.ONE_SIDE]. */
     val holeSide: IslandHoleSide = DEFAULT_HOLE_SIDE,
-    /** Draws the red alignment ring on the real overlay (calibration only). */
     val showHoleGuide: Boolean = DEFAULT_SHOW_HOLE_GUIDE,
     val islandShape: IslandShape = DEFAULT_ISLAND_SHAPE,
-    /**
-     * Motion runs at 90 Hz normally and at 120 Hz when this is on. The panel only receives a
-     * frame-rate hint while something is actually animating, so battery use stays idle when the
-     * island is still.
-     */
     val highQualityMotion: Boolean = DEFAULT_HIGH_QUALITY_MOTION,
-    /**
-     * Seconds the island stays visible with nothing to show before it curls into the camera hole.
-     * Any content cancels the countdown.
-     */
     val idleContractDelaySec: Int = DEFAULT_IDLE_CONTRACT_DELAY_SEC,
+
+    // Source switches. Timer is user-owned and always available once started.
+    val mediaEnabled: Boolean = true,
+    val notificationsEnabled: Boolean = true,
+    val callsEnabled: Boolean = true,
+    val chargingEnabled: Boolean = true,
+    val batteryLowEnabled: Boolean = true,
+    val powerSaveEnabled: Boolean = true,
+    val downloadsEnabled: Boolean = true,
+    val navigationEnabled: Boolean = true,
+
+    // Alert behaviour / privacy.
+    val notificationDurationSec: Int = DEFAULT_NOTIFICATION_DURATION_SEC,
+    val chargingDurationSec: Int = DEFAULT_CHARGING_DURATION_SEC,
+    val batteryAlertDurationSec: Int = DEFAULT_BATTERY_ALERT_DURATION_SEC,
+    val batteryLowThresholdPercent: Int = DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT,
+    val redactOnLockscreen: Boolean = true,
+    val autoExpandCalls: Boolean = true,
+
+    // Expanded geometry / typography.
+    val expandedMaxWidthDp: Int = DEFAULT_EXPANDED_MAX_WIDTH_DP,
+    val expandedCornerRadiusDp: Int = DEFAULT_EXPANDED_CORNER_RADIUS_DP,
+    val contentMarginDp: Int = DEFAULT_CONTENT_MARGIN_DP,
+    val sensorClearanceDp: Int = DEFAULT_SENSOR_CLEARANCE_DP,
+    val islandTextScalePercent: Int = DEFAULT_ISLAND_TEXT_SCALE_PERCENT,
+
+    // Motion / performance. Morphs use the panel's high-rate hint; ambient loops can run slower.
+    val ambientFrameRateHz: Int = DEFAULT_AMBIENT_FRAME_RATE_HZ,
+    val motionScalePercent: Int = DEFAULT_MOTION_SCALE_PERCENT,
+
+    // Per-source accents. Media keeps its artwork-sampled accent.
+    val timerColorArgb: Int = DEFAULT_TIMER_COLOR_ARGB,
+    val chargingColorArgb: Int = DEFAULT_CHARGING_COLOR_ARGB,
+    val batteryLowColorArgb: Int = DEFAULT_BATTERY_LOW_COLOR_ARGB,
+    val powerSaveColorArgb: Int = DEFAULT_POWER_SAVE_COLOR_ARGB,
+    val callAnswerColorArgb: Int = DEFAULT_CALL_ANSWER_COLOR_ARGB,
+    val callDeclineColorArgb: Int = DEFAULT_CALL_DECLINE_COLOR_ARGB,
+    val downloadColorArgb: Int = DEFAULT_DOWNLOAD_COLOR_ARGB,
+    val navigationColorArgb: Int = DEFAULT_NAVIGATION_COLOR_ARGB,
+
+    // Second-party integration opt-outs. Empty means every allowed package can surface.
+    val disabledPackages: Set<String> = emptySet(),
 ) {
-    /** Keeps every value inside its supported range so the overlay can never be drawn broken. */
     fun coerced(): IslandSettings = copy(
         offsetXDp = offsetXDp.coerceIn(OFFSET_X_RANGE),
         offsetYDp = offsetYDp.coerceIn(OFFSET_Y_RANGE),
@@ -79,6 +100,18 @@ data class IslandSettings(
         holeRadiusDp = holeRadiusDp.coerceIn(HOLE_RADIUS_RANGE),
         holeRatioPercent = holeRatioPercent.coerceIn(HOLE_RATIO_RANGE),
         idleContractDelaySec = idleContractDelaySec.coerceIn(IDLE_CONTRACT_DELAY_RANGE),
+        notificationDurationSec = notificationDurationSec.coerceIn(ALERT_DURATION_RANGE),
+        chargingDurationSec = chargingDurationSec.coerceIn(ALERT_DURATION_RANGE),
+        batteryAlertDurationSec = batteryAlertDurationSec.coerceIn(ALERT_DURATION_RANGE),
+        batteryLowThresholdPercent = batteryLowThresholdPercent.coerceIn(BATTERY_LOW_THRESHOLD_RANGE),
+        expandedMaxWidthDp = expandedMaxWidthDp.coerceIn(EXPANDED_MAX_WIDTH_RANGE),
+        expandedCornerRadiusDp = expandedCornerRadiusDp.coerceIn(EXPANDED_CORNER_RADIUS_RANGE),
+        contentMarginDp = contentMarginDp.coerceIn(CONTENT_MARGIN_RANGE),
+        sensorClearanceDp = sensorClearanceDp.coerceIn(SENSOR_CLEARANCE_RANGE),
+        islandTextScalePercent = islandTextScalePercent.coerceIn(ISLAND_TEXT_SCALE_RANGE),
+        ambientFrameRateHz = ambientFrameRateHz.coerceIn(AMBIENT_FRAME_RATE_RANGE),
+        motionScalePercent = motionScalePercent.coerceIn(MOTION_SCALE_RANGE),
+        disabledPackages = disabledPackages.toSet(),
     )
 
     companion object {
@@ -93,8 +126,16 @@ data class IslandSettings(
         val HOLE_RADIUS_RANGE = 4..20
         val HOLE_RATIO_RANGE = 20..80
         val IDLE_CONTRACT_DELAY_RANGE = 1..10
-        /** The UI only exposes the small side, so the useful range is 20..50. */
         val HOLE_RATIO_UI_RANGE = 20..50
+        val ALERT_DURATION_RANGE = 2..10
+        val BATTERY_LOW_THRESHOLD_RANGE = 5..30
+        val EXPANDED_MAX_WIDTH_RANGE = 280..408
+        val EXPANDED_CORNER_RADIUS_RANGE = 24..44
+        val CONTENT_MARGIN_RANGE = 8..20
+        val SENSOR_CLEARANCE_RANGE = 2..8
+        val ISLAND_TEXT_SCALE_RANGE = 90..130
+        val AMBIENT_FRAME_RATE_RANGE = 30..120
+        val MOTION_SCALE_RANGE = 50..150
 
         const val DEFAULT_OFFSET_X_DP = 0
         const val DEFAULT_OFFSET_Y_DP = 6
@@ -103,8 +144,6 @@ data class IslandSettings(
         const val DEFAULT_CORNER_RADIUS_DP = 16
         const val DEFAULT_STROKE_ENABLED = true
         const val DEFAULT_STROKE_WIDTH_DP = 1
-
-        /** Color.argb(38, 255, 255, 255): the original hairline, byte for byte. */
         const val DEFAULT_STROKE_COLOR_ARGB = 0x26FFFFFF
         const val DEFAULT_HIDE_IN_FULLSCREEN = true
         const val DEFAULT_LOCK_PORTRAIT = true
@@ -119,6 +158,25 @@ data class IslandSettings(
         val DEFAULT_ISLAND_SHAPE = IslandShape.PILL
         const val DEFAULT_HIGH_QUALITY_MOTION = true
         const val DEFAULT_IDLE_CONTRACT_DELAY_SEC = 1
+        const val DEFAULT_NOTIFICATION_DURATION_SEC = 4
+        const val DEFAULT_CHARGING_DURATION_SEC = 4
+        const val DEFAULT_BATTERY_ALERT_DURATION_SEC = 4
+        const val DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT = 20
+        const val DEFAULT_EXPANDED_MAX_WIDTH_DP = 408
+        const val DEFAULT_EXPANDED_CORNER_RADIUS_DP = 44
+        const val DEFAULT_CONTENT_MARGIN_DP = 12
+        const val DEFAULT_SENSOR_CLEARANCE_DP = 4
+        const val DEFAULT_ISLAND_TEXT_SCALE_PERCENT = 100
+        const val DEFAULT_AMBIENT_FRAME_RATE_HZ = 60
+        const val DEFAULT_MOTION_SCALE_PERCENT = 100
+        const val DEFAULT_TIMER_COLOR_ARGB = 0xFFFF9F0A.toInt()
+        const val DEFAULT_CHARGING_COLOR_ARGB = 0xFF30D158.toInt()
+        const val DEFAULT_BATTERY_LOW_COLOR_ARGB = 0xFFFF453A.toInt()
+        const val DEFAULT_POWER_SAVE_COLOR_ARGB = 0xFFFFD60A.toInt()
+        const val DEFAULT_CALL_ANSWER_COLOR_ARGB = 0xFF30D158.toInt()
+        const val DEFAULT_CALL_DECLINE_COLOR_ARGB = 0xFFFF453A.toInt()
+        const val DEFAULT_DOWNLOAD_COLOR_ARGB = 0xFF64D2FF.toInt()
+        const val DEFAULT_NAVIGATION_COLOR_ARGB = 0xFF30D158.toInt()
     }
 }
 
@@ -126,15 +184,11 @@ private val Context.islandSettingsDataStore: DataStore<Preferences> by preferenc
     name = "island_settings",
 )
 
-/**
- * Single source of truth for the island's look. The UI writes here; [IslandService][com.zenith.nothingisland.service.IslandService]
- * collects [settings] and redraws the window, which keeps the service and the app decoupled.
- */
+/** Single source of truth for the island's look and source filters. */
 class IslandSettingsRepository private constructor(private val context: Context) {
 
     val settings: Flow<IslandSettings> = context.islandSettingsDataStore.data
         .catch { throwable ->
-            // A corrupt or unreadable file must not crash the service; fall back to defaults.
             if (throwable is IOException) emit(emptyPreferences()) else throw throwable
         }
         .map { preferences -> preferences.toIslandSettings() }
@@ -165,54 +219,60 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.islandShape] = next.islandShape.name
             preferences[Keys.highQualityMotion] = next.highQualityMotion
             preferences[Keys.idleContractDelay] = next.idleContractDelaySec
+            preferences[Keys.mediaEnabled] = next.mediaEnabled
+            preferences[Keys.notificationsEnabled] = next.notificationsEnabled
+            preferences[Keys.callsEnabled] = next.callsEnabled
+            preferences[Keys.chargingEnabled] = next.chargingEnabled
+            preferences[Keys.batteryLowEnabled] = next.batteryLowEnabled
+            preferences[Keys.powerSaveEnabled] = next.powerSaveEnabled
+            preferences[Keys.downloadsEnabled] = next.downloadsEnabled
+            preferences[Keys.navigationEnabled] = next.navigationEnabled
+            preferences[Keys.notificationDuration] = next.notificationDurationSec
+            preferences[Keys.chargingDuration] = next.chargingDurationSec
+            preferences[Keys.batteryAlertDuration] = next.batteryAlertDurationSec
+            preferences[Keys.batteryLowThreshold] = next.batteryLowThresholdPercent
+            preferences[Keys.redactOnLockscreen] = next.redactOnLockscreen
+            preferences[Keys.autoExpandCalls] = next.autoExpandCalls
+            preferences[Keys.expandedMaxWidth] = next.expandedMaxWidthDp
+            preferences[Keys.expandedCornerRadius] = next.expandedCornerRadiusDp
+            preferences[Keys.contentMargin] = next.contentMarginDp
+            preferences[Keys.sensorClearance] = next.sensorClearanceDp
+            preferences[Keys.islandTextScale] = next.islandTextScalePercent
+            preferences[Keys.ambientFrameRate] = next.ambientFrameRateHz
+            preferences[Keys.motionScale] = next.motionScalePercent
+            preferences[Keys.timerColor] = next.timerColorArgb
+            preferences[Keys.chargingColor] = next.chargingColorArgb
+            preferences[Keys.batteryLowColor] = next.batteryLowColorArgb
+            preferences[Keys.powerSaveColor] = next.powerSaveColorArgb
+            preferences[Keys.callAnswerColor] = next.callAnswerColorArgb
+            preferences[Keys.callDeclineColor] = next.callDeclineColorArgb
+            preferences[Keys.downloadColor] = next.downloadColorArgb
+            preferences[Keys.navigationColor] = next.navigationColorArgb
+            preferences[Keys.disabledPackages] = next.disabledPackages
         }
     }
 
     suspend fun setOffsetXDp(value: Int) = update { it.copy(offsetXDp = value) }
-
     suspend fun setOffsetYDp(value: Int) = update { it.copy(offsetYDp = value) }
-
     suspend fun setWidthDp(value: Int) = update { it.copy(widthDp = value) }
-
     suspend fun setHeightDp(value: Int) = update { it.copy(heightDp = value) }
-
     suspend fun setCornerRadiusDp(value: Int) = update { it.copy(cornerRadiusDp = value) }
-
     suspend fun setStrokeEnabled(enabled: Boolean) = update { it.copy(strokeEnabled = enabled) }
-
     suspend fun setStrokeWidthDp(value: Int) = update { it.copy(strokeWidthDp = value) }
-
-    /** [argb] is stored as-is (alpha included); the UI offers opaque swatches and an RRGGBB field. */
     suspend fun setStrokeColorArgb(argb: Int) = update { it.copy(strokeColorArgb = argb) }
-
     suspend fun setHideInFullscreen(enabled: Boolean) = update { it.copy(hideInFullscreen = enabled) }
-
     suspend fun setLockPortrait(enabled: Boolean) = update { it.copy(lockPortrait = enabled) }
-
     suspend fun setHoleEnabled(enabled: Boolean) = update { it.copy(holeEnabled = enabled) }
-
     suspend fun setHoleCenterXDp(value: Int) = update { it.copy(holeCenterXDp = value) }
-
     suspend fun setHoleCenterYDp(value: Int) = update { it.copy(holeCenterYDp = value) }
-
     suspend fun setHoleRadiusDp(value: Int) = update { it.copy(holeRadiusDp = value) }
-
     suspend fun setHoleMode(mode: IslandHoleMode) = update { it.copy(holeMode = mode) }
-
     suspend fun setHoleRatioPercent(value: Int) = update { it.copy(holeRatioPercent = value) }
-
     suspend fun setHoleSide(side: IslandHoleSide) = update { it.copy(holeSide = side) }
-
     suspend fun setShowHoleGuide(enabled: Boolean) = update { it.copy(showHoleGuide = enabled) }
-
     suspend fun setIslandShape(shape: IslandShape) = update { it.copy(islandShape = shape) }
-
-    suspend fun setHighQualityMotion(enabled: Boolean) =
-        update { it.copy(highQualityMotion = enabled) }
-
-    suspend fun setIdleContractDelaySec(value: Int) =
-        update { it.copy(idleContractDelaySec = value) }
-
+    suspend fun setHighQualityMotion(enabled: Boolean) = update { it.copy(highQualityMotion = enabled) }
+    suspend fun setIdleContractDelaySec(value: Int) = update { it.copy(idleContractDelaySec = value) }
     suspend fun resetToDefaults() = update { IslandSettings() }
 
     companion object {
@@ -248,6 +308,36 @@ private object Keys {
     val islandShape = stringPreferencesKey("island_shape")
     val highQualityMotion = booleanPreferencesKey("motion_120hz")
     val idleContractDelay = intPreferencesKey("idle_contract_delay_sec")
+    val mediaEnabled = booleanPreferencesKey("source_media_enabled")
+    val notificationsEnabled = booleanPreferencesKey("source_notifications_enabled")
+    val callsEnabled = booleanPreferencesKey("source_calls_enabled")
+    val chargingEnabled = booleanPreferencesKey("source_charging_enabled")
+    val batteryLowEnabled = booleanPreferencesKey("source_battery_low_enabled")
+    val powerSaveEnabled = booleanPreferencesKey("source_power_save_enabled")
+    val downloadsEnabled = booleanPreferencesKey("source_downloads_enabled")
+    val navigationEnabled = booleanPreferencesKey("source_navigation_enabled")
+    val notificationDuration = intPreferencesKey("notification_duration_sec")
+    val chargingDuration = intPreferencesKey("charging_duration_sec")
+    val batteryAlertDuration = intPreferencesKey("battery_alert_duration_sec")
+    val batteryLowThreshold = intPreferencesKey("battery_low_threshold_percent")
+    val redactOnLockscreen = booleanPreferencesKey("redact_on_lockscreen")
+    val autoExpandCalls = booleanPreferencesKey("auto_expand_calls")
+    val expandedMaxWidth = intPreferencesKey("expanded_max_width_dp")
+    val expandedCornerRadius = intPreferencesKey("expanded_corner_radius_dp")
+    val contentMargin = intPreferencesKey("content_margin_dp")
+    val sensorClearance = intPreferencesKey("sensor_clearance_dp")
+    val islandTextScale = intPreferencesKey("island_text_scale_percent")
+    val ambientFrameRate = intPreferencesKey("ambient_frame_rate_hz")
+    val motionScale = intPreferencesKey("motion_scale_percent")
+    val timerColor = intPreferencesKey("timer_color_argb")
+    val chargingColor = intPreferencesKey("charging_color_argb")
+    val batteryLowColor = intPreferencesKey("battery_low_color_argb")
+    val powerSaveColor = intPreferencesKey("power_save_color_argb")
+    val callAnswerColor = intPreferencesKey("call_answer_color_argb")
+    val callDeclineColor = intPreferencesKey("call_decline_color_argb")
+    val downloadColor = intPreferencesKey("download_color_argb")
+    val navigationColor = intPreferencesKey("navigation_color_argb")
+    val disabledPackages = stringSetPreferencesKey("disabled_packages")
 }
 
 private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
@@ -271,10 +361,38 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     showHoleGuide = this[Keys.showHoleGuide] ?: IslandSettings.DEFAULT_SHOW_HOLE_GUIDE,
     islandShape = this[Keys.islandShape].enumOrDefault(IslandSettings.DEFAULT_ISLAND_SHAPE),
     highQualityMotion = this[Keys.highQualityMotion] ?: IslandSettings.DEFAULT_HIGH_QUALITY_MOTION,
-    idleContractDelaySec = this[Keys.idleContractDelay]
-        ?: IslandSettings.DEFAULT_IDLE_CONTRACT_DELAY_SEC,
+    idleContractDelaySec = this[Keys.idleContractDelay] ?: IslandSettings.DEFAULT_IDLE_CONTRACT_DELAY_SEC,
+    mediaEnabled = this[Keys.mediaEnabled] ?: true,
+    notificationsEnabled = this[Keys.notificationsEnabled] ?: true,
+    callsEnabled = this[Keys.callsEnabled] ?: true,
+    chargingEnabled = this[Keys.chargingEnabled] ?: true,
+    batteryLowEnabled = this[Keys.batteryLowEnabled] ?: true,
+    powerSaveEnabled = this[Keys.powerSaveEnabled] ?: true,
+    downloadsEnabled = this[Keys.downloadsEnabled] ?: true,
+    navigationEnabled = this[Keys.navigationEnabled] ?: true,
+    notificationDurationSec = this[Keys.notificationDuration] ?: IslandSettings.DEFAULT_NOTIFICATION_DURATION_SEC,
+    chargingDurationSec = this[Keys.chargingDuration] ?: IslandSettings.DEFAULT_CHARGING_DURATION_SEC,
+    batteryAlertDurationSec = this[Keys.batteryAlertDuration] ?: IslandSettings.DEFAULT_BATTERY_ALERT_DURATION_SEC,
+    batteryLowThresholdPercent = this[Keys.batteryLowThreshold] ?: IslandSettings.DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT,
+    redactOnLockscreen = this[Keys.redactOnLockscreen] ?: true,
+    autoExpandCalls = this[Keys.autoExpandCalls] ?: true,
+    expandedMaxWidthDp = this[Keys.expandedMaxWidth] ?: IslandSettings.DEFAULT_EXPANDED_MAX_WIDTH_DP,
+    expandedCornerRadiusDp = this[Keys.expandedCornerRadius] ?: IslandSettings.DEFAULT_EXPANDED_CORNER_RADIUS_DP,
+    contentMarginDp = this[Keys.contentMargin] ?: IslandSettings.DEFAULT_CONTENT_MARGIN_DP,
+    sensorClearanceDp = this[Keys.sensorClearance] ?: IslandSettings.DEFAULT_SENSOR_CLEARANCE_DP,
+    islandTextScalePercent = this[Keys.islandTextScale] ?: IslandSettings.DEFAULT_ISLAND_TEXT_SCALE_PERCENT,
+    ambientFrameRateHz = this[Keys.ambientFrameRate] ?: IslandSettings.DEFAULT_AMBIENT_FRAME_RATE_HZ,
+    motionScalePercent = this[Keys.motionScale] ?: IslandSettings.DEFAULT_MOTION_SCALE_PERCENT,
+    timerColorArgb = this[Keys.timerColor] ?: IslandSettings.DEFAULT_TIMER_COLOR_ARGB,
+    chargingColorArgb = this[Keys.chargingColor] ?: IslandSettings.DEFAULT_CHARGING_COLOR_ARGB,
+    batteryLowColorArgb = this[Keys.batteryLowColor] ?: IslandSettings.DEFAULT_BATTERY_LOW_COLOR_ARGB,
+    powerSaveColorArgb = this[Keys.powerSaveColor] ?: IslandSettings.DEFAULT_POWER_SAVE_COLOR_ARGB,
+    callAnswerColorArgb = this[Keys.callAnswerColor] ?: IslandSettings.DEFAULT_CALL_ANSWER_COLOR_ARGB,
+    callDeclineColorArgb = this[Keys.callDeclineColor] ?: IslandSettings.DEFAULT_CALL_DECLINE_COLOR_ARGB,
+    downloadColorArgb = this[Keys.downloadColor] ?: IslandSettings.DEFAULT_DOWNLOAD_COLOR_ARGB,
+    navigationColorArgb = this[Keys.navigationColor] ?: IslandSettings.DEFAULT_NAVIGATION_COLOR_ARGB,
+    disabledPackages = this[Keys.disabledPackages] ?: emptySet(),
 ).coerced()
 
-/** Unknown/renamed enum names fall back instead of throwing, so old data always loads. */
 private inline fun <reified T : Enum<T>> String?.enumOrDefault(default: T): T =
     if (this == null) default else runCatching { enumValueOf<T>(this) }.getOrDefault(default)
