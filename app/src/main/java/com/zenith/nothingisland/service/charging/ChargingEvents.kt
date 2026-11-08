@@ -1,6 +1,5 @@
 package com.zenith.nothingisland.service.charging
 
-import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
@@ -9,11 +8,9 @@ import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandStateHolder
 
 /**
- * Shared battery logic for the two entry points: the manifest receiver (plug events) and the
- * service's sticky `ACTION_BATTERY_CHANGED` receiver (level + plug type). No polling.
- *
- * A short debounce collapses the duplicate signals Android sends around a plug event
- * (`POWER_CONNECTED` and `BATTERY_CHANGED` with a new `EXTRA_PLUGGED`).
+ * Shared battery logic for the service's sticky `ACTION_BATTERY_CHANGED` receiver (level + plug
+ * type). No polling and no manifest cold-wake path: plug transitions arrive as battery changes
+ * while the island is actually running. A short debounce collapses duplicate plug signals.
  */
 object ChargingEvents {
 
@@ -34,25 +31,9 @@ object ChargingEvents {
         lastPlugged = intent.plugged()
     }
 
-    /** Called from the manifest [ChargingReceiver] when the charger is plugged in. */
-    @Synchronized
-    fun onPowerConnected(context: Context) {
-        val sticky = readStickyBattery(context)
-        val level = sticky?.level()?.takeIf { it >= 0 } ?: lastLevel
-        lastPlugged = sticky?.plugged() ?: lastPlugged
-        confirm(level)
-    }
-
-    @Synchronized
-    fun onPowerDisconnected() {
-        lastPlugged = 0
-        lastConfirmationAt = -CONNECT_DEBOUNCE_MS
-        IslandStateHolder.clearCharging()
-    }
-
     /** Sticky battery callback (fires on plug changes and level changes). */
     @Synchronized
-    fun onBatteryChanged(context: Context, intent: Intent) {
+    fun onBatteryChanged(intent: Intent) {
         val level = intent.level()
         val plugged = intent.plugged()
         val pluggedNow = plugged != 0
@@ -61,6 +42,7 @@ object ChargingEvents {
             if (lastPlugged > 0) IslandStateHolder.clearCharging()
             lastPlugged = 0
             lastLevel = level
+            lastConfirmationAt = -CONNECT_DEBOUNCE_MS
             return
         }
 
@@ -87,10 +69,6 @@ object ChargingEvents {
             ),
         )
     }
-
-    private fun readStickyBattery(context: Context): Intent? = runCatching {
-        context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-    }.getOrNull()
 
     private fun Intent.level(): Int {
         val raw = getIntExtra(BatteryManager.EXTRA_LEVEL, -1)

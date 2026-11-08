@@ -42,15 +42,8 @@
                 android:value="conversations|alerting" />
         </service>
 
-        <!-- Plug/unplug signal for the charging module; the service reads level via sticky battery. -->
-        <receiver
-            android:name=".service.charging.ChargingReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.POWER_CONNECTED" />
-                <action android:name="android.intent.action.POWER_DISCONNECTED" />
-            </intent-filter>
-        </receiver>
+        <!-- No manifest plug receiver: it cold-started the process only to no-op when the island
+             was disabled. The running service observes plug transitions via ACTION_BATTERY_CHANGED. -->
 
         <!--
             Classic AccessibilityService overlay: no root, no SYSTEM_ALERT_WINDOW needed.

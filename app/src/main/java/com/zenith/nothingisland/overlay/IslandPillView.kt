@@ -182,7 +182,6 @@ internal class IslandPillView(context: Context) : View(context) {
     private var dormantCornerPx = 1f
 
     /** True while the panel is in an always-on/doze state. */
-    private var aod = false
 
     /** If a morph somehow never settles, this forces it so the window can never stay oversized. */
     private val settleWatchdog = Runnable { forceSettle() }
@@ -290,12 +289,14 @@ internal class IslandPillView(context: Context) : View(context) {
         if (dormantTarget == target) return
         dormantTarget = target
         if (!framesReady) return
+        refreshAmbientLoops()
         if (!motionAllowed) {
             dormantProgress = target
             dormantVelocity = 0f
             dormantSettling = false
             updateSatelliteTarget()
             invalidate()
+            post { onMorphSettled?.invoke() }
             return
         }
         updateSatelliteTarget()
@@ -307,13 +308,6 @@ internal class IslandPillView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** Always-on display: black on black, so the shell keeps only a hairline outline. */
-    fun setAod(enabled: Boolean) {
-        if (aod == enabled) return
-        aod = enabled
-        invalidate()
-    }
-
     /** User customization: source accents, typography, margins, ambient rate and motion speed. */
     fun setCustomization(settings: IslandSettings) {
         val next = settings.coerced()
@@ -321,6 +315,7 @@ internal class IslandPillView(context: Context) : View(context) {
         customization = next
         textScalePercent = customization.islandTextScalePercent
         updateSatelliteTarget()
+        refreshAmbientLoops()
         invalidate()
     }
 
@@ -333,6 +328,9 @@ internal class IslandPillView(context: Context) : View(context) {
 
     /** True while the shell is still moving (expand/retract or curling into the hole). */
     fun isMorphing(): Boolean = springActive || dormantSettling || satelliteActive
+
+    /** True once the idle curl has fully landed behind the lens and the surface can be detached. */
+    fun isDormant(): Boolean = dormantTarget == 1f && !dormantSettling && dormantProgress >= 0.999f
 
     /** Stops every frame source while the window is suppressed; re-entry snaps to live content. */
     fun onHidden() {
@@ -349,9 +347,18 @@ internal class IslandPillView(context: Context) : View(context) {
         swapAnimating = false
         previousContent = null
         revealAnimating = false
+        revealTextKey = null
         satelliteSwapAnimating = false
         previousSatelliteDrawable = null
         clearSatelliteIcon()
+        // Do not retain notification PendingIntents/RemoteInputs, media bitmaps, or drawables in a
+        // detached view. The owner keeps the single live event needed to restore the island.
+        content = null
+        expanded = false
+        animating = false
+        progressAnimating = false
+        satelliteTarget = 0f
+        satelliteProgress = 0f
         targets.clear()
         requestMotionRate(false)
     }
@@ -461,8 +468,7 @@ internal class IslandPillView(context: Context) : View(context) {
 
         content = newContent
         expanded = newExpanded
-        animating = motionAllowed && (newContent as? IslandContent.Media)?.isPlaying == true
-        progressAnimating = motionAllowed && (newContent as? IslandContent.Download)?.indeterminate == true
+        refreshAmbientLoops()
         // Keep the outgoing icon while the daughter circle re-absorbs into the shell. A new
         // persistent activity replaces it; alerts/battery confirmations only retract it.
         val nextSatelliteIcon = if (customization.detachedAppIcon) satelliteIcon(newContent) else null
@@ -500,6 +506,20 @@ internal class IslandPillView(context: Context) : View(context) {
             postDelayed(settleWatchdog, MORPH_WATCHDOG_MS)
         }
         invalidate()
+    }
+
+    /** Decorative loops are opt-in, visible-only, and never run while curled behind the lens. */
+    private fun refreshAmbientLoops() {
+        val enabled = IslandRenderDemand.ambientLoopsEnabled(
+            motionAllowed = motionAllowed,
+            userEnabled = customization.ambientAnimationsEnabled,
+            dormant = dormantTarget == 1f,
+        )
+        animating = enabled && (content as? IslandContent.Media)?.isPlaying == true
+        progressAnimating = enabled && (content as? IslandContent.Download)?.indeterminate == true
+        if (!animating && !progressAnimating) {
+            requestMotionRate(isMorphing() || revealAnimating || satelliteSwapAnimating)
+        }
     }
 
     /** Identity of what the island is showing, ignoring per-second tick values. */
@@ -757,10 +777,9 @@ internal class IslandPillView(context: Context) : View(context) {
         path: Path = shellPath,
         paintShell: Boolean = true,
     ) {
-        // On the always-on display the island is a black shape on a black screen, so only an
-        // outline can be seen — and it is forced to a hairline (~2 px) instead of the user width.
-        val strokePx = if (aod) min(AOD_STROKE_PX, density) else strokeWidthPx
-        val strokeOn = aod || (strokeEnabled && strokeWidthPx > 0f)
+        // Screen-off/doze never renders the island, so the shell always uses the user's stroke.
+        val strokePx = strokeWidthPx
+        val strokeOn = strokeEnabled && strokeWidthPx > 0f
         // Without a stroke the shell fills the frame; with one, the outline is centred on the
         // edge, so the shape is inset by half the stroke width.
         val half = if (strokeOn) strokePx / 2f else 0f
@@ -788,8 +807,8 @@ internal class IslandPillView(context: Context) : View(context) {
         satelliteBounds.height() / 2f * (0.72f + 0.28f * progress)
 
     private fun shellStrokeHalf(): Float {
-        val strokePx = if (aod) min(AOD_STROKE_PX, density) else strokeWidthPx
-        val strokeOn = aod || (strokeEnabled && strokeWidthPx > 0f)
+        val strokePx = strokeWidthPx
+        val strokeOn = strokeEnabled && strokeWidthPx > 0f
         return if (strokeOn) strokePx / 2f else 0f
     }
 
@@ -1109,12 +1128,13 @@ internal class IslandPillView(context: Context) : View(context) {
      * is dropped to 0 the moment the island is still, so an idle pill never pins the panel high.
      */
     private fun requestMotionRate(active: Boolean, ambientOnly: Boolean = false) {
-        val rate = when {
-            !active || !motionAllowed -> 0f
-            ambientOnly -> customization.ambientFrameRateHz.toFloat()
-            highQualityMotion -> 120f
-            else -> 90f
-        }
+        val rate = IslandRenderDemand.motionRateHz(
+            active = active,
+            ambientOnly = ambientOnly,
+            motionAllowed = motionAllowed,
+            ambientFrameRateHz = customization.ambientFrameRateHz,
+            highQualityMotion = highQualityMotion,
+        )
         if (rate == requestedRate) return
         requestedRate = rate
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
@@ -2128,7 +2148,6 @@ internal class IslandPillView(context: Context) : View(context) {
 
     private companion object {
         /** Always-on display outline: at most 1 dp and never more than 2 physical px. */
-        const val AOD_STROKE_PX = 2f
 
         /** Never let a lost frame callback strand the island in its oversized morph window. */
         const val MORPH_WATCHDOG_MS = 900L

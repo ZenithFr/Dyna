@@ -21,7 +21,8 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   row and unboxed prev/play-pause/next controls, all below the lens. Unsupported transport actions
   are disabled. Buttons call `MediaController.TransportControls`; updates arrive through
   `MediaController.Callback` (no polling). Artwork is downscaled and sampled for accent color only
-  when its identity changes.
+  when its identity changes. The original full-size bitmap is not strongly retained; only the
+  bounded thumbnail is kept, and decorative playing bars are opt-in.
 - **Notifications**: an alerting notification shows the app icon + title for 4 s; tap to expand
   for title, text and up to two actions below the lens (inline reply included). Private/secret
   notifications are redacted or skipped while the keyguard is locked. Filtering skips ongoing,
@@ -34,7 +35,8 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   answer/decline/end controls and optional auto-expand. No Shizuku or telecom role is required.
 - **Charging / battery**: plug-in shows a green bolt + `xx%` (`FULL` at 100 %); crossing the
   configurable low-battery threshold shows a low card; power-save mode changes show a saver card.
-  Driven by public power/battery broadcasts + sticky battery intent — no polling.
+  Driven by public power/battery broadcasts + sticky battery intent — no polling and no manifest
+  plug receiver that cold-wakes the process while the island is disabled.
 - **Downloads / Live Update-style progress**: progress notifications (including Android 15
   `ProgressStyle`-compatible `android.progress*` extras) become a persistent download card with
   percent/indeterminate progress, open and cancel actions.
@@ -46,7 +48,8 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   minute presets from the app; the compact pill shows an orange timer/pause glyph + `mm:ss`.
   Tap to expand for circular pause/resume + cancel controls leading and a large orange `mm:ss`
   trailing, below the lens. Time is
-  derived from `SystemClock.elapsedRealtime`, so ticks never drift; a finished timer shows
+  derived from `SystemClock.elapsedRealtime`, so ticks never drift. While the panel is off/dozing
+  the 1 Hz UI ticker is replaced by a single completion wake at the end timestamp; a finished timer shows
   `TIME'S UP` / `00:00` for 4 s before clearing. Notifications and charging still layer above it
   and hand it back when they expire.
 - **Detached app icon**: a persistent live activity — music, timer, maps or downloads — keeps the
@@ -78,7 +81,9 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   exist at rest; drags, secondary pointers and cancels cannot fire a tap. The system animator scale
   is respected (`0` snaps without spatial motion). On Android 15+ motion requests **120 Hz** (90 Hz
   when the high-quality switch is off) and drops the request to 0 at rest; Android 12–14 follows the
-  panel's normal vsync because the per-view frame-rate API is unavailable.
+  panel's normal vsync because the per-view frame-rate API is unavailable. Decorative ambient loops
+  (playing bars / indeterminate progress) are **off by default**; when enabled they use a separate
+  30 Hz default rate and never run while dormant, hidden, or screen-off.
 - **Idle contraction**: with nothing to show — no notification, media, timer or charging — the
   shell curls up into the camera-hole circle after a **1 s** delay (configurable 1–10 s in the
   calibration panel). Pausing a track or letting an alert expire hands the island back to idle, so
@@ -87,10 +92,13 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   retract morph, not a one-frame pop. It is staged rather
   than uniform: over half of the width is gone before the height moves at all, then the height
   flattens while the rest of the width closes, so the shell slides up into the lens instead of
-  shrinking around its own centre.
+  shrinking around its own centre. Once the curl settles, the island surface is detached entirely
+  instead of leaving a transparent window/buffer behind the lens; new activity re-attaches it.
 - **Display behaviour**: **Hide in landscape** and **Hide in fullscreen** default on. Suppression
-  removes the island, touch shield and inline reply (the invisible 1 px inset probe remains), and stops overlay frame work; sources keep
-  running and the current activity snaps back when allowed. Fullscreen is detected from status-bar
+  removes the island, touch shield and inline reply and stops overlay frame work; landscape/fullscreen
+  keep the invisible 1 px inset probe and snap the current activity back when allowed. Screen-off/doze/AOD
+  is stricter: every island/probe/touch surface is detached, media/battery observers stop, and the timer
+  keeps only its end timestamp plus one completion wake. Fullscreen is detected from status-bar
   inset visibility through a 1 px non-touchable probe, not window content. The probe fails open:
   until it has observed a visible status bar, a hidden reading is treated as unknown and cannot hide
   the island. **Portrait lock** only
@@ -98,7 +106,7 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   re-anchoring to the rotated cutout. The settings app itself remains portrait.
 - **Customization**: every source can be switched off; alert holds, battery threshold, lockscreen
   redaction and call auto-expand are configurable; expanded width/corner/margins/lens clearance/text
-  scale are sliders; motion has a 120 Hz morph hint, separate ambient loop rate and speed scale;
+  scale are sliders; motion has a 120 Hz morph hint, opt-in ambient loops with a separate rate, and speed scale;
   each source accent has swatches + hex entry. Popular apps can be opted out per package.
 - Onboarding checklist with live grant status for the accessibility service, notification
   listener, battery optimisation and overlay permission. Settings controls use Material 3 with
@@ -180,9 +188,10 @@ adb shell dumpsys accessibility | grep -i nothingisland
 
 Disable it the same way (remove the component from the list, or just toggle it off in Settings).
 
-### 2. Battery optimisation (recommended)
+### 2. Battery optimisation (optional reliability override)
 
-In-app: tap **ALLOW**. Or:
+Leave the app optimized for the lowest background battery use. Exempt it only if Nothing OS kills
+the accessibility service on your build. In-app: tap **REVIEW**. Or:
 
 ```bash
 adb shell dumpsys deviceidle whitelist +com.zenith.nothingisland
@@ -260,6 +269,8 @@ clamped to safe ranges:
 | Island shape | Pill / Notch | Pill |
 | Idle contraction delay | 1 … 10 s | 1 s |
 | Motion at 120 Hz | on/off (Android 15+ hint) | on |
+| Ambient animations | on/off (visible decorative loops only) | off |
+| Ambient loop rate | 30 … 120 Hz | 30 Hz |
 | Outline | on/off | on |
 | Stroke width | 1 … 5 dp | 1 dp |
 | Stroke color | RRGGBB / swatches | 15 % white |
@@ -340,6 +351,7 @@ app/src/main/java/com/zenith/nothingisland/
 ├── overlay/IslandVisibility.kt           # landscape/fullscreen policy + privacy-safe inset probe
 ├── overlay/IslandLayout.kt               # Apple-style compact/expanded layout rules
 ├── overlay/IslandMotion.kt               # frame-rate-independent spring/easing math
+├── overlay/IslandRenderDemand.kt         # pure idle/ambient/frame-rate demand rules
 ├── overlay/IslandPillView.kt             # canvas renderer, hole avoidance, gesture targets
 ├── overlay/IslandInteraction.kt          # tap callbacks / transport commands
 ├── overlay/IslandReplyWindow.kt          # focusable inline-reply overlay
@@ -348,7 +360,7 @@ app/src/main/java/com/zenith/nothingisland/
 ├── service/IslandStateHolder.kt          # single source of truth, persistent base + 4 s alerts
 ├── service/media/MediaSource.kt          # active MediaSession → island
 ├── service/notification/                 # listener + filtering/parsing
-├── service/charging/                     # power receiver + sticky battery
+├── service/charging/                     # dynamic power-save + sticky battery receiver
 ├── service/timer/TimerModule.kt          # countdown controller (tick, pause/resume/stop)
 ├── ui/HomeScreen.kt                      # onboarding + timer + calibration UI
 ├── ui/theme/                             # black/white/red Nothing palette

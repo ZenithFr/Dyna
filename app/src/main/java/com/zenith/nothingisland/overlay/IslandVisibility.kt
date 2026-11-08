@@ -9,13 +9,14 @@ import android.view.WindowInsets
 import android.view.WindowManager
 
 /** Why the island is currently not allowed on screen. [NONE] means it may render normally. */
-enum class IslandSuppression { NONE, LANDSCAPE, FULLSCREEN }
+enum class IslandSuppression { NONE, SCREEN_OFF, LANDSCAPE, FULLSCREEN }
 
 /**
  * Pure visibility policy. Fullscreen means the status bar is hidden: that is the system signal
  * that the top of the screen belongs to immersive video/a game. Navigation-only hiding does not
  * obscure the island, and edge-to-edge apps with a visible status bar are not fullscreen.
- * An unknown inset state never suppresses by itself.
+ * An unknown inset state never suppresses by itself. A non-ON display always suppresses: doze/AOD
+ * and screen-off must not keep overlay surfaces or animation loops alive.
  */
 object IslandVisibilityPolicy {
     fun resolve(
@@ -23,7 +24,9 @@ object IslandVisibilityPolicy {
         hideInFullscreen: Boolean,
         landscape: Boolean,
         statusBarVisible: Boolean?,
+        screenOn: Boolean = true,
     ): IslandSuppression = when {
+        !screenOn -> IslandSuppression.SCREEN_OFF
         hideInLandscape && landscape -> IslandSuppression.LANDSCAPE
         hideInFullscreen && statusBarVisible == false -> IslandSuppression.FULLSCREEN
         else -> IslandSuppression.NONE

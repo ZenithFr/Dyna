@@ -8,6 +8,7 @@ import com.zenith.nothingisland.data.IslandSettingsRepository
 import com.zenith.nothingisland.service.IslandService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -20,16 +21,21 @@ import kotlinx.coroutines.launch
 class IslandNotificationListener : NotificationListenerService() {
 
     private var source: NotificationSource? = null
+    private var settingsJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val notifications: NotificationSource
-        get() = source ?: NotificationSource(this).also { source = it }
+        get() = source ?: NotificationSource(applicationContext).also { source = it }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
         // Media sessions become readable exactly now, so refresh instead of waiting for an event.
         IslandService.instance?.refreshMedia()
-        scope.launch {
+        // Android can reconnect the listener without destroying the service. Cancel the previous
+        // collector first; otherwise every reconnect leaks another DataStore subscription.
+        settingsJob?.cancel()
+        source?.clear()
+        settingsJob = scope.launch {
             IslandSettingsRepository.get(this@IslandNotificationListener).settings.collect { snapshot ->
                 notifications.updateSettings(snapshot)
             }
@@ -37,6 +43,8 @@ class IslandNotificationListener : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        settingsJob?.cancel()
+        settingsJob = null
         source?.clear()
         IslandService.instance?.onNotificationAccessLost()
         super.onListenerDisconnected()
@@ -44,6 +52,7 @@ class IslandNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
         val posted = sbn ?: return
+        if (!IslandService.isRunning) return
         guardNotifications(TAG) {
             val ranking = Ranking()
             val known = rankingMap?.getRanking(posted.key, ranking) == true
@@ -53,10 +62,13 @@ class IslandNotificationListener : NotificationListenerService() {
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         val removed = sbn ?: return
+        if (!IslandService.isRunning) return
         guardNotifications(TAG) { notifications.onRemoved(removed) }
     }
 
     override fun onDestroy() {
+        settingsJob?.cancel()
+        settingsJob = null
         scope.cancel()
         source?.clear()
         source = null

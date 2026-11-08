@@ -19,6 +19,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandStateHolder
 import com.zenith.nothingisland.service.notification.IslandNotificationListener
+import java.lang.ref.WeakReference
 
 /**
  * Mirrors the active media session into [IslandStateHolder].
@@ -40,9 +41,12 @@ class MediaSource(private val context: Context) {
     private var started = false
     private var playing = false
     private var enabled = true
-    private var artSource: Bitmap? = null
+    // Identity only: do not strongly retain the session's full-size artwork. The overlay keeps the
+    // bounded thumbnail, and a GC'd original simply causes one rescale on the next metadata update.
+    private var artSource: WeakReference<Bitmap>? = null
     private var artScaled: Bitmap? = null
     private var artAccent = IslandContent.DEFAULT_ACCENT_COLOR
+    private val accentPixels = IntArray(MAX_ART_PX * MAX_ART_PX)
 
     /** Last package whose launcher icon was resolved; icon loading is not free. */
     private var iconPackage: String? = null
@@ -123,6 +127,8 @@ class MediaSource(private val context: Context) {
         detach()
         playing = false
         clearArtCache()
+        iconPackage = null
+        iconDrawable = null
         IslandStateHolder.clearMedia()
     }
 
@@ -267,9 +273,13 @@ class MediaSource(private val context: Context) {
             clearArtCache()
             return null
         }
-        if (bitmap === artSource) return artScaled
+        if (bitmap === artSource?.get()) return artScaled
         val scaled = downscale(bitmap)
-        artSource = bitmap
+        if (scaled == null) {
+            clearArtCache()
+            return null
+        }
+        artSource = WeakReference(bitmap)
         artScaled = scaled
         artAccent = sampleAccent(scaled)
         return scaled
@@ -277,6 +287,7 @@ class MediaSource(private val context: Context) {
 
     private fun clearArtCache() {
         // Bitmaps are owned by the media session; never recycle them here.
+        artSource?.clear()
         artSource = null
         artScaled = null
         artAccent = IslandContent.DEFAULT_ACCENT_COLOR
@@ -285,12 +296,14 @@ class MediaSource(private val context: Context) {
     /** One bounded pass over the 128 px thumbnail, only when the artwork identity changes. */
     private fun sampleAccent(bitmap: Bitmap): Int {
         if (bitmap.width <= 0 || bitmap.height <= 0) return IslandContent.DEFAULT_ACCENT_COLOR
-        val pixels = IntArray(bitmap.width * bitmap.height)
+        val count = bitmap.width * bitmap.height
+        if (count > accentPixels.size) return IslandContent.DEFAULT_ACCENT_COLOR
+        val pixels = accentPixels
         runCatching { bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height) }
             .onFailure { return IslandContent.DEFAULT_ACCENT_COLOR }
         var bestScore = 0f
         var best = IslandContent.DEFAULT_ACCENT_COLOR
-        for (index in pixels.indices step 4) {
+        for (index in 0 until count step 4) {
             val color = pixels[index]
             if (Color.alpha(color) < 128) continue
             val r = Color.red(color)
@@ -309,14 +322,14 @@ class MediaSource(private val context: Context) {
     }
 
     /** Keeps the overlay cheap: album art never enters a window larger than 128 px. */
-    private fun downscale(bitmap: Bitmap): Bitmap {
+    private fun downscale(bitmap: Bitmap): Bitmap? {
         val longest = maxOf(bitmap.width, bitmap.height)
         if (longest <= MAX_ART_PX) return bitmap
         val ratio = MAX_ART_PX.toFloat() / longest
         val width = (bitmap.width * ratio).toInt().coerceAtLeast(1)
         val height = (bitmap.height * ratio).toInt().coerceAtLeast(1)
-        return runCatching { Bitmap.createScaledBitmap(bitmap, width, height, true) }
-            .getOrDefault(bitmap)
+        // Never fall back to the original: a failed scale must not pin a multi-megabyte bitmap.
+        return runCatching { Bitmap.createScaledBitmap(bitmap, width, height, true) }.getOrNull()
     }
 
     private fun hasListenerAccess(): Boolean =

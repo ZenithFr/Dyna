@@ -165,6 +165,7 @@ class IslandReplyWindow(private val serviceContext: Context) {
     }
 
     fun hide() {
+        handler.removeCallbacksAndMessages(null)
         val view = root ?: return
         root = null
         val imm = serviceContext.getSystemService(InputMethodManager::class.java)

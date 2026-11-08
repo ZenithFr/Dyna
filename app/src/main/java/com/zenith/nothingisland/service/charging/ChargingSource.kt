@@ -14,8 +14,8 @@ import com.zenith.nothingisland.service.IslandStateHolder
 
 /**
  * Battery / power-save source. Uses only public sticky battery + power-save broadcasts; no Shizuku
- * or privileged shell is needed for these states. Charging plug events are shared with the manifest
- * receiver through [ChargingEvents].
+ * or privileged shell is needed for these states. Plug transitions arrive through the same sticky
+ * battery receiver via [ChargingEvents]; there is no manifest cold-wake receiver.
  */
 class ChargingSource(private val context: Context) {
 
@@ -48,7 +48,7 @@ class ChargingSource(private val context: Context) {
             override fun onReceive(receiverContext: Context?, intent: Intent?) {
                 if (intent?.action != Intent.ACTION_BATTERY_CHANGED) return
                 runCatching {
-                    ChargingEvents.onBatteryChanged(context, intent)
+                    ChargingEvents.onBatteryChanged(intent)
                     maybeBatteryLow(intent.levelPercent())
                 }.onFailure { Log.w(TAG, "Battery update failed", it) }
             }

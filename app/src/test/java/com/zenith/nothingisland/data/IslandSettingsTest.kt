@@ -1,6 +1,7 @@
 package com.zenith.nothingisland.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -45,6 +46,15 @@ class IslandSettingsTest {
         assertEquals(IslandSettings.COMPACT_EDGE_PADDING_RANGE.first, settings.compactEdgePaddingDp)
         assertEquals(IslandSettings.SATELLITE_SIZE_RANGE.last, settings.satelliteSizeDp)
         assertEquals(IslandSettings.SATELLITE_ICON_PADDING_RANGE.first, settings.satelliteIconPaddingDp)
+    }
+
+    @Test
+    fun ambientLoopsAreOffByDefaultAndRateIsClamped() {
+        val defaults = IslandSettings()
+        assertFalse(defaults.ambientAnimationsEnabled)
+        assertEquals(30, defaults.ambientFrameRateHz)
+        val settings = IslandSettings(ambientFrameRateHz = 999).coerced()
+        assertEquals(IslandSettings.AMBIENT_FRAME_RATE_RANGE.last, settings.ambientFrameRateHz)
     }
 
     @Test

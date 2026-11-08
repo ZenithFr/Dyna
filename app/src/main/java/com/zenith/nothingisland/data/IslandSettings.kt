@@ -79,7 +79,9 @@ data class IslandSettings(
     val compactIconSizeDp: Int = DEFAULT_COMPACT_ICON_SIZE_DP,
     val compactEdgePaddingDp: Int = DEFAULT_COMPACT_EDGE_PADDING_DP,
 
-    // Motion / performance. Morphs use the panel's high-rate hint; ambient loops can run slower.
+    // Motion / performance. Morphs use the panel's high-rate hint; decorative ambient loops are
+    // opt-in so a settled island does not keep the GPU awake.
+    val ambientAnimationsEnabled: Boolean = DEFAULT_AMBIENT_ANIMATIONS_ENABLED,
     val ambientFrameRateHz: Int = DEFAULT_AMBIENT_FRAME_RATE_HZ,
     val motionScalePercent: Int = DEFAULT_MOTION_SCALE_PERCENT,
 
@@ -191,7 +193,8 @@ data class IslandSettings(
         const val DEFAULT_SATELLITE_ICON_PADDING_DP = 3
         const val DEFAULT_COMPACT_ICON_SIZE_DP = 20
         const val DEFAULT_COMPACT_EDGE_PADDING_DP = 8
-        const val DEFAULT_AMBIENT_FRAME_RATE_HZ = 60
+        const val DEFAULT_AMBIENT_ANIMATIONS_ENABLED = false
+        const val DEFAULT_AMBIENT_FRAME_RATE_HZ = 30
         const val DEFAULT_MOTION_SCALE_PERCENT = 100
         const val DEFAULT_TIMER_COLOR_ARGB = 0xFFFF9F0A.toInt()
         const val DEFAULT_CHARGING_COLOR_ARGB = 0xFF30D158.toInt()
@@ -269,6 +272,7 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.satelliteIconPadding] = next.satelliteIconPaddingDp
             preferences[Keys.compactIconSize] = next.compactIconSizeDp
             preferences[Keys.compactEdgePadding] = next.compactEdgePaddingDp
+            preferences[Keys.ambientAnimationsEnabled] = next.ambientAnimationsEnabled
             preferences[Keys.ambientFrameRate] = next.ambientFrameRateHz
             preferences[Keys.motionScale] = next.motionScalePercent
             preferences[Keys.timerColor] = next.timerColorArgb
@@ -366,6 +370,7 @@ private object Keys {
     val satelliteIconPadding = intPreferencesKey("satellite_icon_padding_dp")
     val compactIconSize = intPreferencesKey("compact_icon_size_dp")
     val compactEdgePadding = intPreferencesKey("compact_edge_padding_dp")
+    val ambientAnimationsEnabled = booleanPreferencesKey("ambient_animations_enabled")
     val ambientFrameRate = intPreferencesKey("ambient_frame_rate_hz")
     val motionScale = intPreferencesKey("motion_scale_percent")
     val timerColor = intPreferencesKey("timer_color_argb")
@@ -427,6 +432,7 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     satelliteIconPaddingDp = this[Keys.satelliteIconPadding] ?: IslandSettings.DEFAULT_SATELLITE_ICON_PADDING_DP,
     compactIconSizeDp = this[Keys.compactIconSize] ?: IslandSettings.DEFAULT_COMPACT_ICON_SIZE_DP,
     compactEdgePaddingDp = this[Keys.compactEdgePadding] ?: IslandSettings.DEFAULT_COMPACT_EDGE_PADDING_DP,
+    ambientAnimationsEnabled = this[Keys.ambientAnimationsEnabled] ?: IslandSettings.DEFAULT_AMBIENT_ANIMATIONS_ENABLED,
     ambientFrameRateHz = this[Keys.ambientFrameRate] ?: IslandSettings.DEFAULT_AMBIENT_FRAME_RATE_HZ,
     motionScalePercent = this[Keys.motionScale] ?: IslandSettings.DEFAULT_MOTION_SCALE_PERCENT,
     timerColorArgb = this[Keys.timerColor] ?: IslandSettings.DEFAULT_TIMER_COLOR_ARGB,

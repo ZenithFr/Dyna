@@ -23,7 +23,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  *
  * Time is derived from [SystemClock.elapsedRealtime] and a stored **end timestamp**, so ticks never
  * accumulate drift: each publish recomputes `end - now` instead of subtracting a fixed interval.
- * The ticker only exists while the timer runs; paused, finished and idle states hold no job at all.
+ * The ticker only exists while the timer runs and the island is visible. Screen-off/doze keeps the
+ * end timestamp and at most one completion wake; paused, finished and idle states hold no ticker.
  *
  * [IslandStateHolder] stays the single source of truth for the overlay ([IslandStateHolder.postTimer]
  * on every change). [state] exists so Compose can show the same live value without touching the
@@ -54,12 +55,34 @@ object TimerModule {
 
     private var ticker: Job? = null
     private var clearJob: Job? = null
+    private var hiddenCompletionJob: Job? = null
+    private val visible = MutableStateFlow(true)
 
     private var label = DEFAULT_LABEL
     private var endTimeElapsedMs = 0L
     private var pausedRemainingMs = 0L
     private var paused = false
     private var finished = false
+
+    /**
+     * Screen-off/doze does not need a 1 Hz UI tick. Keep the countdown authoritative, cancel the
+     * ticker, and wake once at the end timestamp; returning to the island resumes boundary ticks.
+     */
+    @Synchronized
+    fun setIslandVisible(value: Boolean) {
+        if (visible.value == value) return
+        visible.value = value
+        if (_state.value == null || paused || finished) return
+        if (value) {
+            hiddenCompletionJob?.cancel()
+            hiddenCompletionJob = null
+            startTicker()
+        } else {
+            ticker?.cancel()
+            ticker = null
+            scheduleHiddenCompletion()
+        }
+    }
 
     /** Starts (or replaces) the timer. [label] is shown in the expanded pill. */
     @Synchronized
@@ -89,6 +112,8 @@ object TimerModule {
         paused = true
         ticker?.cancel()
         ticker = null
+        hiddenCompletionJob?.cancel()
+        hiddenCompletionJob = null
         publish(remaining)
     }
 
@@ -128,6 +153,8 @@ object TimerModule {
     private fun cancelJobs() {
         ticker?.cancel()
         ticker = null
+        hiddenCompletionJob?.cancel()
+        hiddenCompletionJob = null
         clearJob?.cancel()
         clearJob = null
     }
@@ -144,6 +171,13 @@ object TimerModule {
      */
     private fun startTicker() {
         ticker?.cancel()
+        ticker = null
+        if (!visible.value) {
+            scheduleHiddenCompletion()
+            return
+        }
+        hiddenCompletionJob?.cancel()
+        hiddenCompletionJob = null
         ticker = scope.launch {
             while (isActive) {
                 val remaining = remainingNow()
@@ -154,6 +188,21 @@ object TimerModule {
                 publish(remaining)
                 delay(untilNextSecond(remaining))
             }
+        }
+    }
+
+    private fun scheduleHiddenCompletion() {
+        hiddenCompletionJob?.cancel()
+        val remaining = remainingNow()
+        if (remaining <= 0L) {
+            hiddenCompletionJob = null
+            finish()
+            return
+        }
+        hiddenCompletionJob = scope.launch {
+            delay(remaining)
+            hiddenCompletionJob = null
+            finish()
         }
     }
 
@@ -183,6 +232,8 @@ object TimerModule {
         publish(0L)
         clearJob?.cancel()
         clearJob = scope.launch {
+            // If the countdown ended while the panel was off, keep 00:00 until the user can see it.
+            visible.first { it }
             withTimeoutOrNull(FINISHED_VISIBILITY_TIMEOUT_MS) {
                 IslandStateHolder.state.first { it?.source == IslandSource.Timer }
             }

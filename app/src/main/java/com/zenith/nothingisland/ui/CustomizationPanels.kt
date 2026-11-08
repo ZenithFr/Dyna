@@ -128,6 +128,11 @@ internal fun MotionPerformancePanel(settings: IslandSettings, onSettingsChange: 
             "CMF Phone 2 Pro target: request the panel's high rate for expand/retract, then drop to 0 at rest.",
             settings.highQualityMotion,
         ) { onSettingsChange { s -> s.copy(highQualityMotion = it) } }
+        ToggleRow(
+            "Ambient animations",
+            "Playing bars and indeterminate progress loop only while the island is visible. Off by default to save battery; morphs stay smooth.",
+            settings.ambientAnimationsEnabled,
+        ) { onSettingsChange { s -> s.copy(ambientAnimationsEnabled = it) } }
         Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
             CalibrationSlider("Ambient loop rate", settings.ambientFrameRateHz, IslandSettings.AMBIENT_FRAME_RATE_RANGE, unit = "Hz") {
                 onSettingsChange { s -> s.copy(ambientFrameRateHz = it) }
@@ -136,7 +141,7 @@ internal fun MotionPerformancePanel(settings: IslandSettings, onSettingsChange: 
                 onSettingsChange { s -> s.copy(motionScalePercent = it) }
             }
             Text(
-                "Ambient loops (playing bars, indeterminate progress) can run below the morph rate to save GPU time. Morphs stay interruptible and velocity-preserving.",
+                "When enabled, ambient loops run at this rate instead of the morph rate. The island still detaches when idle, hidden, or the screen is off.",
                 style = MaterialTheme.typography.bodySmall,
                 color = NothingMuted,
                 modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),

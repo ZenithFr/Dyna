@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.service.notification.NotificationListenerService.Ranking
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import android.util.LruCache
 import androidx.core.app.NotificationCompat
 import com.zenith.nothingisland.data.IslandSettings
 import com.zenith.nothingisland.service.IslandContent
@@ -33,6 +34,7 @@ class NotificationSource(private val context: Context) {
     private val keyguardManager: KeyguardManager? = context.getSystemService(KeyguardManager::class.java)
 
     private val labelCache = mutableMapOf<String, String>()
+    private val iconCache = LruCache<String, Drawable>(MAX_PACKAGE_ICONS)
     private val activeKeys = mutableMapOf<String, IslandSource>()
     private val activePackages = mutableMapOf<String, String>()
     private val signatures = mutableMapOf<String, String>()
@@ -40,13 +42,14 @@ class NotificationSource(private val context: Context) {
 
     fun updateSettings(next: IslandSettings) {
         val previous = settings
-        settings = next.coerced()
-        if (!next.callsEnabled) IslandStateHolder.clearCall()
-        if (!next.notificationsEnabled) IslandStateHolder.clearNotification()
-        if (!next.downloadsEnabled) IslandStateHolder.clearDownload()
-        if (!next.navigationEnabled) IslandStateHolder.clearNavigation()
-        if (next.disabledPackages != previous.disabledPackages) {
-            val disabled = next.disabledPackages
+        val coerced = next.coerced()
+        settings = coerced
+        if (!coerced.callsEnabled) IslandStateHolder.clearCall()
+        if (!coerced.notificationsEnabled) IslandStateHolder.clearNotification()
+        if (!coerced.downloadsEnabled) IslandStateHolder.clearDownload()
+        if (!coerced.navigationEnabled) IslandStateHolder.clearNavigation()
+        if (coerced.disabledPackages != previous.disabledPackages) {
+            val disabled = coerced.disabledPackages
             activePackages.filterValues { it in disabled }.keys.toList().forEach { key ->
                 clearKey(key)
             }
@@ -64,11 +67,20 @@ class NotificationSource(private val context: Context) {
         val redact = settings.redactOnLockscreen && keyguardManager?.isKeyguardLocked == true &&
             notification.visibility != Notification.VISIBILITY_PUBLIC
         val icon = if (redact) appIcon(sbn.packageName) else icon(notification, sbn.packageName)
-        val signature = when (source) {
-            IslandSource.Call -> callContent(sbn, notification, appLabel, icon, redact).signature()
-            IslandSource.Notification -> notificationContent(sbn, notification, appLabel, icon, redact).signature()
-            IslandSource.Download -> downloadContent(sbn, notification, appLabel, icon, redact).signature()
-            IslandSource.Navigation -> navigationContent(sbn, notification, appLabel, icon, redact).signature()
+        // Parse once, then dedupe by signature. The previous path built every accepted notification
+        // twice (signature pass + post pass), doubling binder/extras work on busy progress updates.
+        val content = when (source) {
+            IslandSource.Call -> callContent(sbn, notification, appLabel, icon, redact)
+            IslandSource.Notification -> notificationContent(sbn, notification, appLabel, icon, redact)
+            IslandSource.Download -> downloadContent(sbn, notification, appLabel, icon, redact)
+            IslandSource.Navigation -> navigationContent(sbn, notification, appLabel, icon, redact)
+            else -> return
+        }
+        val signature = when (content) {
+            is IslandContent.Call -> content.signature()
+            is IslandContent.Notification -> content.signature()
+            is IslandContent.Download -> content.signature()
+            is IslandContent.Navigation -> content.signature()
             else -> return
         }
         if (signatures[sbn.key] == signature) return
@@ -76,20 +88,11 @@ class NotificationSource(private val context: Context) {
         activeKeys[sbn.key] = source
         activePackages[sbn.key] = sbn.packageName
 
-        when (source) {
-            IslandSource.Call -> IslandStateHolder.postCall(
-                callContent(sbn, notification, appLabel, icon, redact),
-                expanded = settings.autoExpandCalls,
-            )
-            IslandSource.Notification -> IslandStateHolder.postNotification(
-                notificationContent(sbn, notification, appLabel, icon, redact),
-            )
-            IslandSource.Download -> IslandStateHolder.postDownload(
-                downloadContent(sbn, notification, appLabel, icon, redact),
-            )
-            IslandSource.Navigation -> IslandStateHolder.postNavigation(
-                navigationContent(sbn, notification, appLabel, icon, redact),
-            )
+        when (content) {
+            is IslandContent.Call -> IslandStateHolder.postCall(content, expanded = settings.autoExpandCalls)
+            is IslandContent.Notification -> IslandStateHolder.postNotification(content)
+            is IslandContent.Download -> IslandStateHolder.postDownload(content)
+            is IslandContent.Navigation -> IslandStateHolder.postNavigation(content)
             else -> Unit
         }
     }
@@ -102,6 +105,7 @@ class NotificationSource(private val context: Context) {
     fun clear() {
         activeKeys.keys.toList().forEach { clearKey(it) }
         labelCache.clear()
+        iconCache.evictAll()
         signatures.clear()
         activePackages.clear()
         IslandStateHolder.clearNotification()
@@ -322,8 +326,12 @@ class NotificationSource(private val context: Context) {
         return appIcon(packageName)
     }
 
-    private fun appIcon(packageName: String): Drawable? =
-        runCatching { packageManager.getApplicationIcon(packageName) }.getOrNull()
+    private fun appIcon(packageName: String): Drawable? {
+        iconCache.get(packageName)?.let { return it }
+        val icon = runCatching { packageManager.getApplicationIcon(packageName) }.getOrNull()
+        if (icon != null) iconCache.put(packageName, icon)
+        return icon
+    }
 
     private fun appLabel(packageName: String): String = labelCache.getOrPut(packageName) {
         runCatching {
@@ -365,6 +373,7 @@ class NotificationSource(private val context: Context) {
     private companion object {
         const val TAG = "IslandNotifications"
         const val MAX_ACTIONS = 2
+        const val MAX_PACKAGE_ICONS = 12
     }
 }
 
