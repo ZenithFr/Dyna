@@ -8,6 +8,18 @@ import org.junit.Test
 
 class IslandVisibilityTest {
     @Test
+    fun screenOffSuppressionWinsEvenWhenOtherHidingIsDisabled() {
+        assertEquals(
+            IslandSuppression.SCREEN_OFF,
+            IslandVisibilityPolicy.resolve(false, false, landscape = true, statusBarVisible = false, screenOn = false),
+        )
+        assertEquals(
+            IslandSuppression.SCREEN_OFF,
+            IslandVisibilityPolicy.resolve(true, true, landscape = false, statusBarVisible = true, screenOn = false),
+        )
+    }
+
+    @Test
     fun landscapeSuppressionWinsAndIsIndependentOfPortraitLock() {
         assertEquals(
             IslandSuppression.LANDSCAPE,

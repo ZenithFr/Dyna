@@ -41,24 +41,31 @@ be feature-flagged and never required for the core island.
 - Geometry: compact width/height/corner/offsets, hole calibration, expanded max width/corner,
   content margin, lens clearance, island text scale, compact icon size/edge padding, detached
   circle on/off + diameter/gap/icon inset, landscape/fullscreen hiding.
-- Motion: 120 Hz morph hint, ambient loop rate, motion speed, idle contraction delay, portrait lock.
+- Motion: 120 Hz morph hint, opt-in ambient animations + loop rate, motion speed, idle contraction delay, portrait lock.
 - Colour: shell stroke plus timer/charging/battery-low/power-saver/call answer/decline/download/maps accents.
 
 ## Performance budget (CMF 120 Hz)
 
-- Frame deadline: 8.3 ms. Morphs request 120 Hz on Android 15+; ambient loops default to 60 Hz.
+- Frame deadline: 8.3 ms. Morphs request 120 Hz on Android 15+; decorative ambient loops are off by
+  default and, when enabled, default to 30 Hz. Idle/dormant/hidden/screen-off demand is 0 Hz.
 - Fixed accessibility-overlay envelope: no WindowManager resize during a morph.
 - Closed-form springs: same trajectory at 60/120 Hz, velocity preserved on reversal.
 - Whole-line text replacement; no per-glyph shaping/substring allocation.
-- Artwork downscaled/accent-sampled only when bitmap identity changes.
+- Artwork downscaled/accent-sampled only when bitmap identity changes; the original bitmap is held
+  weakly and the accent pixel buffer is reused. Notification parsing happens once per accepted post;
+  package icons are LRU-bounded and listener caches clear on disconnect.
 - Hit targets only at rest; input window removed for non-interactive battery confirmations and suppression.
 - Mitosis reuses shell/circle/neck paths; icon crossfade layers are bounded to the icon box.
 - No polling: MediaController callbacks, notification listener, sticky battery/power broadcasts.
+  No manifest plug receiver cold-wake path. Screen-off/doze detaches all surfaces, stops media/battery
+  observers, and reduces a running timer to one completion wake. Idle contraction detaches the settled
+  dormant surface; listener reconnects cancel the previous settings collector.
 - Fullscreen probe fails open until calibrated by a visible status-bar reading; suppression transitions are logged.
 
 Device verification still required:
 ```bash
 adb shell dumpsys gfxinfo com.zenith.nothingisland framestats
+adb shell dumpsys meminfo com.zenith.nothingisland
 adb shell dumpsys SurfaceFlinger --latency NothingIsland
 adb shell settings put system animator_duration_scale 0   # restore afterwards
 ```

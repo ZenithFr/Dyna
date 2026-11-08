@@ -337,12 +337,12 @@ private fun SetupPanel(
         SetupItem(
             title = "Battery optimisation",
             description = if (batteryOptimizationIgnored) {
-                "Exempt. Nothing OS is less likely to stop the service."
+                "Exempt. Reliability override enabled; this can increase background battery use."
             } else {
-                "Recommended so Nothing OS keeps the service alive."
+                "Optional. Leave optimized for lowest battery use; exempt only if Nothing OS kills the service."
             },
-            status = if (batteryOptimizationIgnored) SetupStatus.Done else SetupStatus.Todo,
-            actionLabel = if (batteryOptimizationIgnored) "MANAGE" else "ALLOW",
+            status = if (batteryOptimizationIgnored) SetupStatus.Done else SetupStatus.Optional,
+            actionLabel = if (batteryOptimizationIgnored) "MANAGE" else "REVIEW",
             onClick = onRequestIgnoreBatteryOptimizations,
         )
         SetupDivider()

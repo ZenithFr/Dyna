@@ -77,6 +77,8 @@ class IslandOverlay(private val serviceContext: Context) {
     private var accessibilityRevision = -1
     private var suppression = IslandSuppression.NONE
     private var statusBarVisible: Boolean? = null
+    private var screenActive = true
+    private var updatingSuppression = false
     private val visibilityMonitor = IslandVisibilityMonitor(serviceContext) { visible ->
         statusBarVisible = visible
         updateSuppression()
@@ -84,6 +86,9 @@ class IslandOverlay(private val serviceContext: Context) {
 
     /** Lets the service close a focusable reply window before the island is suppressed. */
     var onSuppressed: (() -> Unit)? = null
+
+    /** Lets the service stop media/battery observers while the panel is off or dozing. */
+    var onScreenActiveChanged: ((Boolean) -> Unit)? = null
     /** Millisecond timestamp when the island first became idle (no content). */
     private var idleStartMs = 0L
     private val idleHandler = Handler(Looper.getMainLooper())
@@ -100,6 +105,7 @@ class IslandOverlay(private val serviceContext: Context) {
         // motion starts (visible as a hitch); the settled-morph callback re-places the touch
         // window afterwards.
         pill.setDormant(true)
+        if (pill.isDormant()) hide()
     }
 
     private val displayListener = object : DisplayManager.DisplayListener {
@@ -113,18 +119,25 @@ class IslandOverlay(private val serviceContext: Context) {
     init {
         // When the morph settles the touch window can snap from the union of both frames to the
         // shell that actually ended up visible.
-        pill.onMorphSettled = { apply() }
-        // AOD is a display state, not a broadcast the accessibility service reliably sees: listen
-        // to the panel so the hairline outline appears the moment the screen dozes.
+        pill.onMorphSettled = {
+            // Once the idle curl finishes there is nothing to composite: detach the surface instead
+            // of keeping a transparent window and its buffers alive behind the camera lens.
+            if (IslandRenderDemand.shouldDetachIdle(event?.content != null, pill.isDormant())) hide() else apply()
+        }
+        // Display state is not a broadcast the accessibility service reliably sees: listen to the
+        // panel so doze/AOD/off detach every island surface and interactive-on re-attaches cleanly.
         displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
-        visibilityMonitor.start()
+        updateSuppression()
     }
 
-    /** True when the panel is in always-on/doze (Nothing OS renders the AOD in this state). */
-    private fun isAlwaysOn(): Boolean = runCatching {
+    /** True only for a fully interactive panel; doze/AOD/off must not render the island. */
+    private fun isScreenOn(): Boolean = runCatching {
         val state = displayManager.getDisplay(Display.DEFAULT_DISPLAY)?.state
-        state == Display.STATE_DOZE || state == Display.STATE_DOZE_SUSPEND
-    }.getOrDefault(false)
+        state == null || state == Display.STATE_ON
+    }.getOrDefault(true)
+
+    val isScreenActive: Boolean
+        get() = screenActive
 
     /** Tap callbacks; set by [com.zenith.nothingisland.service.IslandService]. */
     var interaction: IslandInteraction?
@@ -156,13 +169,16 @@ class IslandOverlay(private val serviceContext: Context) {
     }
 
     fun hide() {
-        if (layoutParams == null) return
         cancelIdleContraction()
+        idleStartMs = 0L
         pill.onHidden()
+        val hadIsland = layoutParams != null
         layoutParams = null
         removeTouchWindow()
-        runCatching { windowManager.removeViewImmediate(pill) }
-            .onFailure { Log.w(TAG, "Island window was already detached", it) }
+        if (hadIsland || pill.parent != null) {
+            runCatching { windowManager.removeViewImmediate(pill) }
+                .onFailure { Log.w(TAG, "Island window was already detached", it) }
+        }
     }
 
     /** Full teardown: detach the windows and stop watching the display. */
@@ -172,6 +188,7 @@ class IslandOverlay(private val serviceContext: Context) {
         pill.onMorphSettled = null
         visibilityMonitor.stop()
         onSuppressed = null
+        onScreenActiveChanged = null
         hide()
         runCatching { displayManager.unregisterDisplayListener(displayListener) }
             .onFailure { Log.w(TAG, "Display listener was already detached", it) }
@@ -184,31 +201,53 @@ class IslandOverlay(private val serviceContext: Context) {
     }
 
     private fun updateSuppression() {
-        val bounds = windowManager.maximumWindowMetrics.bounds
-        val landscape = bounds.width() > bounds.height() ||
-            resources().configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val next = IslandVisibilityPolicy.resolve(
-            hideInLandscape = settings.hideInLandscape,
-            hideInFullscreen = settings.hideInFullscreen,
-            landscape = landscape,
-            statusBarVisible = statusBarVisible,
-        )
-        if (next == suppression) {
-            if (next == IslandSuppression.NONE) apply()
-            return
-        }
-        Log.i(
-            TAG,
-            "suppression $suppression -> $next " +
-                "(landscape=$landscape, statusBarVisible=$statusBarVisible, " +
-                "hideLandscape=${settings.hideInLandscape}, hideFullscreen=${settings.hideInFullscreen})",
-        )
-        suppression = next
-        if (next != IslandSuppression.NONE) {
-            onSuppressed?.invoke()
-            hide()
-        } else {
-            apply()
+        if (updatingSuppression) return
+        updatingSuppression = true
+        try {
+            val screenOn = isScreenOn()
+            val previousScreenActive = screenActive
+            screenActive = screenOn
+            // The probe is only needed while the panel is interactive. DisplayManager still wakes
+            // the overlay on STATE_ON, so screen-off keeps no island/probe/touch surfaces attached.
+            if (screenOn) {
+                visibilityMonitor.start()
+            } else {
+                visibilityMonitor.stop()
+                statusBarVisible = null
+            }
+
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            val landscape = bounds.width() > bounds.height() ||
+                resources().configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            val next = IslandVisibilityPolicy.resolve(
+                hideInLandscape = settings.hideInLandscape,
+                hideInFullscreen = settings.hideInFullscreen,
+                landscape = landscape,
+                statusBarVisible = statusBarVisible,
+                screenOn = screenOn,
+            )
+            if (next != suppression) {
+                Log.i(
+                    TAG,
+                    "suppression $suppression -> $next " +
+                        "(screenOn=$screenOn, landscape=$landscape, statusBarVisible=$statusBarVisible, " +
+                        "hideLandscape=${settings.hideInLandscape}, hideFullscreen=${settings.hideInFullscreen})",
+                )
+                suppression = next
+                if (next != IslandSuppression.NONE) {
+                    onSuppressed?.invoke()
+                    hide()
+                } else {
+                    apply()
+                }
+            } else if (next == IslandSuppression.NONE) {
+                apply()
+            }
+            if (previousScreenActive != screenActive) {
+                onScreenActiveChanged?.invoke(screenActive)
+            }
+        } finally {
+            updatingSuppression = false
         }
     }
 
@@ -275,7 +314,6 @@ class IslandOverlay(private val serviceContext: Context) {
         )
         pill.setHighQualityMotion(settings.highQualityMotion)
         pill.setCustomization(settings)
-        pill.setAod(isAlwaysOn())
         // Idle contraction: the shell lingers for the configured delay, then curls up behind the
         // camera hole. Any content (notification, media, timer, charging) cancels the countdown
         // and springs the shell back out instead of leaving it hidden inside the lens.
@@ -343,6 +381,7 @@ class IslandOverlay(private val serviceContext: Context) {
             (SystemClock.elapsedRealtime() - idleStartMs)
         if (remainingMs <= 0L) {
             pill.setDormant(true)
+            if (pill.isDormant()) hide()
             return
         }
         pill.setDormant(false)

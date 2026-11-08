@@ -38,8 +38,8 @@ class IslandService : AccessibilityService(), IslandInteraction {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository by lazy { IslandSettingsRepository.get(this) }
-    private val mediaSource by lazy { MediaSource(this) }
-    private val chargingSource by lazy { ChargingSource(this) }
+    private val mediaSource by lazy { MediaSource(applicationContext) }
+    private val chargingSource by lazy { ChargingSource(applicationContext) }
     private val replyWindow by lazy { IslandReplyWindow(this) }
 
     private var overlay: IslandOverlay? = null
@@ -68,6 +68,20 @@ class IslandService : AccessibilityService(), IslandInteraction {
                         replyWindow.hide()
                         replyKey = null
                     }
+                    it.onScreenActiveChanged = { active ->
+                        // The island is not visible while the panel is off/dozing: drop media
+                        // callbacks and battery receivers instead of updating a hidden surface.
+                        if (active) {
+                            TimerModule.setIslandVisible(true)
+                            syncPowerObservers()
+                        } else {
+                            replyWindow.hide()
+                            replyKey = null
+                            TimerModule.setIslandVisible(false)
+                            runCatching { mediaSource.stop() }
+                            runCatching { chargingSource.stop() }
+                        }
+                    }
                 }
         }
 
@@ -80,7 +94,11 @@ class IslandService : AccessibilityService(), IslandInteraction {
                     batteryMs = snapshot.batteryAlertDurationSec * 1000L,
                 )
                 chargingSource.updateSettings(snapshot)
-                mediaSource.updateEnabled(snapshot.mediaEnabled)
+                if (overlay?.isScreenActive != false) {
+                    mediaSource.updateEnabled(snapshot.mediaEnabled)
+                } else {
+                    mediaSource.stop()
+                }
                 overlay?.updateSettings(snapshot)
             }
         }
@@ -97,16 +115,27 @@ class IslandService : AccessibilityService(), IslandInteraction {
             }
         }
 
-        runCatching { mediaSource.start() }
-            .onFailure { Log.w(TAG, "Media module failed to start", it) }
-        runCatching { chargingSource.start() }
-            .onFailure { Log.w(TAG, "Charging module failed to start", it) }
+        syncPowerObservers()
     }
 
     /** Called by the notification listener when notification access becomes available. */
     fun refreshMedia() {
+        if (overlay?.isScreenActive == false) return
         runCatching { mediaSource.refresh() }
             .onFailure { Log.w(TAG, "Media refresh failed", it) }
+    }
+
+    private fun syncPowerObservers() {
+        TimerModule.setIslandVisible(overlay?.isScreenActive != false)
+        if (overlay?.isScreenActive == false) {
+            runCatching { mediaSource.stop() }
+            runCatching { chargingSource.stop() }
+            return
+        }
+        runCatching { mediaSource.refresh() }
+            .onFailure { Log.w(TAG, "Media module failed to start", it) }
+        runCatching { chargingSource.start() }
+            .onFailure { Log.w(TAG, "Charging module failed to start", it) }
     }
 
     /**
