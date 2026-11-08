@@ -23,6 +23,7 @@ import com.zenith.nothingisland.service.IslandEvent
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.sin
 
 /**
@@ -130,7 +131,9 @@ internal class IslandPillView(context: Context) : View(context) {
 
     /**
      * Idle contraction: 0 = the compact pill, 1 = curled up behind the camera hole so the island
-     * disappears into the punch-hole when there is nothing to show.
+     * disappears into the punch-hole when there is nothing to show. One spring drives it, but the
+     * horizontal and vertical travel of the shell are read from it through two different curves
+     * (see [dormantWidthCage]) so the pill narrows before it flattens.
      */
     private var dormantProgress = 1f
     private var dormantVelocity = 0f
@@ -382,16 +385,16 @@ internal class IslandPillView(context: Context) : View(context) {
         val now = SystemClock.elapsedRealtime()
         if (springActive || dormantSettling) advanceMotion(now)
         val p = progress.coerceIn(0f, 1f)
-        val cage = dormantProgress.coerceIn(0f, 1f)
+        val widthCage = dormantWidthCage(dormantProgress)
         val frame = currentFrame()
         val corner = lerp(
             compactCornerPx + (expandedCornerPx - compactCornerPx) * p,
             dormantCornerPx,
-            cage,
+            widthCage,
         )
 
         // Contracted to a circle behind the lens it must be a circle whatever the shape setting is.
-        val shellShape = if (cage > 0.35f) IslandShape.PILL else shape
+        val shellShape = if (widthCage > 0.35f) IslandShape.PILL else shape
         drawShell(canvas, frame, corner, shellShape)
         targets.clear()
 
@@ -416,15 +419,17 @@ internal class IslandPillView(context: Context) : View(context) {
         canvas.clipPath(shellPath)
         val outgoing = previousContent
         val swapping = outgoing != null && swapAnimating && swapT < 1f
+        // Content fades out with the narrowing (not with the flattening), so nothing is left as a
+        // hard-clipped sliver inside an already thin shell.
         if (swapping) {
             drawContentStack(
-                canvas, outgoing, expandedIn, compactOut, cage,
+                canvas, outgoing, expandedIn, compactOut, widthCage,
                 widthPx, heightPx, stackAlpha = 1f - swapT,
             )
         }
         if (current != null) {
             drawContentStack(
-                canvas, current, expandedIn, compactOut, cage,
+                canvas, current, expandedIn, compactOut, widthCage,
                 widthPx, heightPx, stackAlpha = if (swapping) swapT else 1f,
             )
         }
@@ -681,17 +686,40 @@ internal class IslandPillView(context: Context) : View(context) {
             lerp(compactBounds.right, expandedBounds.right, w),
             lerp(compactBounds.bottom, expandedBounds.bottom, h),
         )
-        // Then the idle contraction wraps that frame into the circle behind the camera hole.
-        val cage = dormantProgress.coerceIn(0f, 1f)
-        if (cage > 0.001f) {
+        // Then the idle contraction wraps that frame into the circle behind the camera hole: the
+        // sides close in first and the top/bottom follow, which is what makes the shell slide up
+        // into the lens instead of shrinking around its own centre.
+        if (dormantProgress > 0.001f) {
+            val widthCage = dormantWidthCage(dormantProgress)
+            val heightCage = dormantHeightCage(dormantProgress)
             frame.set(
-                lerp(frame.left, dormantBounds.left, cage),
-                lerp(frame.top, dormantBounds.top, cage),
-                lerp(frame.right, dormantBounds.right, cage),
-                lerp(frame.bottom, dormantBounds.bottom, cage),
+                lerp(frame.left, dormantBounds.left, widthCage),
+                lerp(frame.top, dormantBounds.top, heightCage),
+                lerp(frame.right, dormantBounds.right, widthCage),
+                lerp(frame.bottom, dormantBounds.bottom, heightCage),
             )
         }
         return frame
+    }
+
+    /**
+     * Horizontal share of the curl. Ease-out, so most of the width is gone early: by the time the
+     * height starts to collapse more than half of the sideways travel is done. It still finishes
+     * exactly at 1, so the last of the width closes while the height does.
+     */
+    private fun dormantWidthCage(cage: Float): Float {
+        val t = cage.coerceIn(0f, 1f)
+        return 1f - (1f - t).pow(DORMANT_WIDTH_LEAD)
+    }
+
+    /**
+     * Vertical share of the curl. It holds still for the first [DORMANT_HEIGHT_START] of the glide
+     * (the shell is only narrowing there) and then runs smoothly to the hole's height, which is
+     * also the moment the shell drops behind the lens.
+     */
+    private fun dormantHeightCage(cage: Float): Float {
+        val t = cage.coerceIn(0f, 1f)
+        return smoothStep((t - DORMANT_HEIGHT_START) / (1f - DORMANT_HEIGHT_START))
     }
 
     /**
@@ -1551,6 +1579,15 @@ internal class IslandPillView(context: Context) : View(context) {
          */
         const val DORMANT_OMEGA = 16f
         const val DORMANT_ZETA = 0.9f
+
+        /**
+         * Curl staging. The exponent shapes the width curve (1.6 → ~67% of the width travel at the
+         * halfway point) and [DORMANT_HEIGHT_START] is where the height joins in, by which time the
+         * shell is already narrower than half its starting width, so it has somewhere to go: the
+         * hole.
+         */
+        const val DORMANT_WIDTH_LEAD = 1.6f
+        const val DORMANT_HEIGHT_START = 0.45f
 
         /** Always-on display outline: at most 1 dp and never more than 2 physical px. */
         const val AOD_STROKE_PX = 2f

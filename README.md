@@ -51,7 +51,10 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   calibration panel). Pausing a track or letting an alert expire hands the island back to idle, so
   it disappears into the lens instead of lingering; new activity cancels the countdown and springs
   the shell back out. The curl is a ~420 ms spring on the same 120 Hz motion path as the expand /
-  retract morph (measured 8.3 ms per frame on device), not a one-frame pop.
+  retract morph (measured 8.3 ms per frame on device), not a one-frame pop. It is staged rather
+  than uniform: over half of the width is gone before the height moves at all, then the height
+  flattens while the rest of the width closes, so the shell slides up into the lens instead of
+  shrinking around its own centre.
 - **Portrait lock** (default on): geometry is always computed from the portrait display width,
   so landscape games/video never resize, rotate or move the island. The app itself is locked to
   portrait. Turn the switch off for rotation-aware behaviour.
