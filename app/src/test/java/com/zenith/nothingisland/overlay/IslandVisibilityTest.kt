@@ -1,6 +1,9 @@
 package com.zenith.nothingisland.overlay
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IslandVisibilityTest {
@@ -38,5 +41,41 @@ class IslandVisibilityTest {
             IslandSuppression.NONE,
             IslandVisibilityPolicy.resolve(true, true, landscape = false, statusBarVisible = null),
         )
+    }
+
+    @Test
+    fun uncalibratedHiddenProbeFailsOpen() {
+        val gate = StatusBarVisibilityGate()
+        assertFalse(gate.calibrated)
+        assertNull(gate.report(false))
+        assertNull(gate.report(null))
+        assertEquals(
+            IslandSuppression.NONE,
+            IslandVisibilityPolicy.resolve(true, true, landscape = false, statusBarVisible = gate.report(false)),
+        )
+    }
+
+    @Test
+    fun probeCanSuppressOnlyAfterObservingVisibleStatusBar() {
+        val gate = StatusBarVisibilityGate()
+        assertNull(gate.report(false))
+        assertEquals(true, gate.report(true))
+        assertTrue(gate.calibrated)
+        assertEquals(false, gate.report(false))
+        assertEquals(
+            IslandSuppression.FULLSCREEN,
+            IslandVisibilityPolicy.resolve(true, true, landscape = false, statusBarVisible = gate.report(false)),
+        )
+        assertEquals(true, gate.report(true))
+    }
+
+    @Test
+    fun probeResetReturnsToFailOpen() {
+        val gate = StatusBarVisibilityGate()
+        gate.report(true)
+        gate.report(false)
+        gate.reset()
+        assertFalse(gate.calibrated)
+        assertNull(gate.report(false))
     }
 }

@@ -31,27 +31,53 @@ object IslandVisibilityPolicy {
 }
 
 /**
+ * Fail-open gate for the inset probe. Some overlay windows report `statusBars` as invisible even
+ * while the system status bar is visible. Until the probe has actually observed a visible status
+ * bar, a hidden reading is treated as unknown instead of suppressing the island everywhere.
+ */
+internal class StatusBarVisibilityGate {
+    var calibrated: Boolean = false
+        private set
+
+    fun report(visible: Boolean?): Boolean? {
+        if (visible == true) calibrated = true
+        return if (visible == false && !calibrated) null else visible
+    }
+
+    fun reset() {
+        calibrated = false
+    }
+}
+
+/**
  * Observes the status-bar visibility through the insets of a 1 px, transparent, non-touchable
  * accessibility-overlay probe. The probe stays attached while the island is suppressed so the
  * return from fullscreen is still observed. It never reads window content, roots, or titles, so
  * the service keeps canRetrieveWindowContent=false and needs no extra permission or Shizuku.
+ *
+ * The probe intentionally does not use FLAG_LAYOUT_IN_SCREEN / cutout-always: those flags let a
+ * window occupy the status-bar area and can make its inset visibility read as hidden on some OEM
+ * builds. A normal non-focusable overlay is enough to observe whether the status bar is visible.
  */
 internal class IslandVisibilityMonitor(
     private val context: Context,
     private val onStatusBarVisibilityChanged: (Boolean?) -> Unit,
 ) {
     private val windowManager = context.getSystemService(WindowManager::class.java)
+    private val gate = StatusBarVisibilityGate()
     private var probe: View? = null
     private var lastVisible: Boolean? = null
 
     fun start() {
         if (probe != null) return
         val manager = windowManager ?: return
+        gate.reset()
+        lastVisible = null
         val view = View(context).apply {
             alpha = 0f
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             setOnApplyWindowInsetsListener { _, insets ->
-                record(insets.isVisible(WindowInsets.Type.statusBars()))
+                record(statusBarVisible(insets), "dispatch")
                 insets
             }
         }
@@ -61,12 +87,10 @@ internal class IslandVisibilityMonitor(
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSPARENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             title = "NothingIslandVisibility"
         }
         runCatching { manager.addView(view, params) }
@@ -75,14 +99,18 @@ internal class IslandVisibilityMonitor(
                 view.requestApplyInsets()
                 refresh()
             }
-            .onFailure { Log.w(TAG, "Fullscreen visibility probe unavailable", it) }
+            .onFailure {
+                Log.w(TAG, "Fullscreen visibility probe unavailable; fullscreen hiding fails open", it)
+                record(null, "unavailable")
+            }
     }
 
     /** Re-read after rotation/display changes; normal changes arrive through inset dispatch. */
     fun refresh() {
+        // Only trust the attached probe's own insets. Service-context WindowMetrics can describe a
+        // different windowing state and must not turn an uncalibrated probe into a hidden reading.
         val insets = probe?.rootWindowInsets
-            ?: runCatching { windowManager?.currentWindowMetrics?.windowInsets }.getOrNull()
-        record(insets?.isVisible(WindowInsets.Type.statusBars()))
+        record(insets?.let(::statusBarVisible), "refresh")
     }
 
     fun stop() {
@@ -90,13 +118,24 @@ internal class IslandVisibilityMonitor(
         probe = null
         runCatching { windowManager?.removeViewImmediate(view) }
             .onFailure { Log.w(TAG, "Visibility probe was already detached", it) }
+        gate.reset()
         lastVisible = null
     }
 
-    private fun record(visible: Boolean?) {
-        if (lastVisible == visible) return
-        lastVisible = visible
-        onStatusBarVisibilityChanged(visible)
+    /** A positive status-bar inset also means visible, even if an OEM reports isVisible=false. */
+    private fun statusBarVisible(insets: WindowInsets): Boolean =
+        insets.isVisible(WindowInsets.Type.statusBars()) ||
+            insets.getInsets(WindowInsets.Type.statusBars()).top > 0
+
+    private fun record(visible: Boolean?, source: String) {
+        val reported = gate.report(visible)
+        if (lastVisible == reported) return
+        lastVisible = reported
+        Log.d(
+            TAG,
+            "statusBar source=$source raw=$visible reported=$reported calibrated=${gate.calibrated}",
+        )
+        onStatusBarVisibilityChanged(reported)
     }
 
     private companion object {

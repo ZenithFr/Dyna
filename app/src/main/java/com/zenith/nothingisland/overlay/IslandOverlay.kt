@@ -197,6 +197,12 @@ class IslandOverlay(private val serviceContext: Context) {
             if (next == IslandSuppression.NONE) apply()
             return
         }
+        Log.i(
+            TAG,
+            "suppression $suppression -> $next " +
+                "(landscape=$landscape, statusBarVisible=$statusBarVisible, " +
+                "hideLandscape=${settings.hideInLandscape}, hideFullscreen=${settings.hideInFullscreen})",
+        )
         suppression = next
         if (next != IslandSuppression.NONE) {
             onSuppressed?.invoke()

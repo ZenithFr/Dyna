@@ -22,7 +22,7 @@ The logical width lands close to the 393 dp Apple screen class, so the expanded 
 | Detached app-icon circle beside the compact shell | Persistent live activity + launcher icon + mitosis spring | Implemented |
 | Detached minimal *second* activity (two at once) | Needs multi-slot renderer/window policy | Roadmap |
 | Tap opens app / long-press expands | README currently tap-to-expand | Preserved deliberately |
-| Landscape / fullscreen hiding | Display metrics + own-probe status-bar insets | Implemented; no window-content access |
+| Landscape / fullscreen hiding | Display metrics + fail-open own-probe status-bar insets | Implemented; no window-content access |
 
 ## Shizuku decision
 
@@ -54,6 +54,7 @@ be feature-flagged and never required for the core island.
 - Hit targets only at rest; input window removed for non-interactive battery confirmations and suppression.
 - Mitosis reuses shell/circle/neck paths; icon crossfade layers are bounded to the icon box.
 - No polling: MediaController callbacks, notification listener, sticky battery/power broadcasts.
+- Fullscreen probe fails open until calibrated by a visible status-bar reading; suppression transitions are logged.
 
 Device verification still required:
 ```bash
