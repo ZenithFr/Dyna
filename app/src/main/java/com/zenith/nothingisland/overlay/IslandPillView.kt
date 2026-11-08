@@ -136,16 +136,8 @@ internal class IslandPillView(context: Context) : View(context) {
     private var dormantVelocity = 0f
     private var dormantTarget = 0f
     private var dormantSettling = false
-    /**
-     * Reset dormant state so the pill frame reverts to the normal shape when content is shown.
-     * Call this from [IslandOverlay.apply] whenever the pill becomes visible again.
-     */
-    fun resetDormantState() {
-        dormantProgress = 0f
-        dormantSettling = false
-        dormantVelocity = 0f
-        dormantTarget = 0f
-    }
+    /** True once the shell has been told to curl into the camera hole (mid-flight or settled). */
+    fun isDormant(): Boolean = dormantTarget > 0.5f
     private val dormantBounds = RectF()
     private var dormantCornerPx = 1f
 

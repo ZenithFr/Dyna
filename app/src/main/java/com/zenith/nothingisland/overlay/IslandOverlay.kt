@@ -75,6 +75,22 @@ class IslandOverlay(private val serviceContext: Context) {
     private var hiddenByFullscreen: Boolean = false
     /** Millisecond timestamp when the island first became idle (no content). */
     private var idleStartMs = 0L
+    /** True while the contraction is posted, so repeated applies cannot queue it twice. */
+    private var idleContractPosted = false
+
+    private val idleHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Curls the idle shell into the camera hole. Posted [IDLE_CONTRACT_DELAY_MS] after the island
+     * went idle and cancelled the moment new content arrives, so the 1 s countdown is real time
+     * instead of "whenever the next layout happens".
+     */
+    private val contractWhenIdle = Runnable {
+        idleContractPosted = false
+        if (event?.content != null) return@Runnable
+        pill.setDormant(true)
+        apply()
+    }
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
@@ -169,6 +185,7 @@ class IslandOverlay(private val serviceContext: Context) {
 
     fun hide() {
         if (layoutParams == null) return
+        cancelIdleContraction()
         layoutParams = null
         removeTouchWindow()
         runCatching { windowManager.removeViewImmediate(pill) }
@@ -177,6 +194,8 @@ class IslandOverlay(private val serviceContext: Context) {
 
     /** Full teardown: detach the windows and stop watching the display. */
     fun release() {
+        cancelIdleContraction()
+        idleStartMs = 0L
         hide()
         runCatching { displayManager.unregisterDisplayListener(displayListener) }
             .onFailure { Log.w(TAG, "Display listener was already detached", it) }
@@ -240,28 +259,16 @@ class IslandOverlay(private val serviceContext: Context) {
         )
         pill.setHighQualityMotion(settings.highQualityMotion)
         pill.setAod(isAlwaysOn())
-        // Idle contraction: visible for first 3s, then smoothly contract to circle behind hole.
+        // Idle contraction: the shell lingers for 1 s, then curls up behind the camera hole. Any
+        // content (notification, media, timer, charging) cancels the countdown and springs the
+        // shell back out instead of leaving it hidden inside the lens.
         if (event?.content == null) {
-            if (idleStartMs == 0L) {
-                // First time becoming idle: record start time, keep pill visible.
-                idleStartMs = SystemClock.elapsedRealtime()
-                pill.alpha = 1f
-            } else {
-                val elapsed = SystemClock.elapsedRealtime() - idleStartMs
-                if (elapsed < 3000L) {
-                    // Still within the 3s visible window.
-                    pill.alpha = 1f
-                } else {
-                    // 3s elapsed: start the spring-driven contraction to the hole.
-                    pill.setDormant(true)
-                    pill.alpha = 1f // keep visible through the contraction animation
-                }
-            }
+            if (idleStartMs == 0L) idleStartMs = SystemClock.elapsedRealtime()
+            scheduleIdleContraction()
         } else {
-            // Content arrived: reset idle timer and make sure dormancy is cleared.
             idleStartMs = 0L
-            pill.alpha = 1f
-            pill.resetDormantState()
+            cancelIdleContraction()
+            pill.setDormant(false)
         }
         Log.w(TAG, "apply content=${event?.content?.javaClass?.simpleName} exp=${event?.expanded} morph=${pill.isMorphing()}")
 
@@ -277,6 +284,27 @@ class IslandOverlay(private val serviceContext: Context) {
         )
 
         updateTouchWindow(compact, expandedFrame)
+    }
+
+    /**
+     * Posts the contraction for whatever is left of the 1 s idle window, or starts it right away
+     * if the window already elapsed (e.g. the service woke up after the phone was asleep).
+     */
+    private fun scheduleIdleContraction() {
+        if (pill.isDormant()) return
+        val remainingMs = IDLE_CONTRACT_DELAY_MS - (SystemClock.elapsedRealtime() - idleStartMs)
+        if (remainingMs <= 0L) {
+            pill.setDormant(true)
+            return
+        }
+        if (idleContractPosted) return
+        idleContractPosted = true
+        idleHandler.postDelayed(contractWhenIdle, remainingMs)
+    }
+
+    private fun cancelIdleContraction() {
+        idleContractPosted = false
+        idleHandler.removeCallbacks(contractWhenIdle)
     }
 
     /** The circle the idle island curls up into: the camera hole itself. */
@@ -562,6 +590,9 @@ class IslandOverlay(private val serviceContext: Context) {
         const val EXPANDED_HEIGHT_DP = 84
         const val EXPANDED_CORNER_RADIUS_DP = 22
         const val EXPANDED_SCREEN_MARGIN_DP = 12
+
+        /** How long the island stays visible with nothing to show before curling into the hole. */
+        const val IDLE_CONTRACT_DELAY_MS = 1_000L
 
         /** Slack around both states so the spring overshoot is never clipped by the window. */
         const val ENVELOPE_PAD_DP = 4f
