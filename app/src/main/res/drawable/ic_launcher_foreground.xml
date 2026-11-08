@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive icon foreground: black canvas, white pill with a red status dot. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- White pill -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M33,47 L71,47 A7,7 0 0 1 78,54 A7,7 0 0 1 71,61 L33,61 A7,7 0 0 1 26,54 A7,7 0 0 1 33,47 Z" />
+
+    <!-- Red dot -->
+    <path
+        android:fillColor="#FFD71921"
+        android:pathData="M84,49 A5,5 0 1 1 84,59 A5,5 0 1 1 84,49 Z" />
+</vector>

@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">Nothing Island</string>
+    <string name="accessibility_service_label">Nothing Island</string>
+    <string name="notification_listener_label">Nothing Island alerts</string>
+    <string name="accessibility_service_description">Draws the Nothing Island pill over Nothing OS. Used to render the island; it does not read screen content or type for you.</string>
+</resources>
