@@ -3,6 +3,7 @@ package com.zenith.nothingisland.service.media
 import android.content.ComponentName
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.drawable.Drawable
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.os.Handler
@@ -37,6 +38,10 @@ class MediaSource(private val context: Context) {
     private var controller: MediaControllerCompat? = null
     private var started = false
     private var playing = false
+
+    /** Last package whose launcher icon was resolved; icon loading is not free. */
+    private var iconPackage: String? = null
+    private var iconDrawable: Drawable? = null
 
     private val activeSessionsListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
@@ -193,8 +198,23 @@ class MediaSource(private val context: Context) {
                 durationMs = duration,
                 positionUpdatedAtElapsedMs = SystemClock.elapsedRealtime(),
                 speed = playback?.playbackSpeed?.takeIf { it > 0f } ?: 1f,
+                appIcon = appIcon(session.packageName),
             ),
         )
+    }
+
+    /**
+     * Launcher icon of the playing app, cached per package: it only changes when another app takes
+     * over the session, so a metadata update must not hit the PackageManager every time.
+     */
+    private fun appIcon(packageName: String?): Drawable? {
+        val name = packageName?.takeIf { it.isNotBlank() } ?: return null
+        if (name == iconPackage) return iconDrawable
+        iconPackage = name
+        iconDrawable = runCatching { context.packageManager.getApplicationIcon(name) }
+            .onFailure { Log.w(TAG, "No launcher icon for $name", it) }
+            .getOrNull()
+        return iconDrawable
     }
 
     private fun albumArt(metadata: MediaMetadataCompat): Bitmap? {

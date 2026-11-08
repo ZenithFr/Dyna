@@ -30,6 +30,12 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   derived from `SystemClock.elapsedRealtime`, so ticks never drift; a finished timer shows
   `TIME'S UP` / `00:00` for 4 s before clearing. Notifications and charging still layer above it
   and hand it back when they expire.
+- **Detached app icon**: a persistent live activity — music or timer — keeps the island compact and
+  moves the owning app's launcher icon into its own shell-height bubble a gap to the right, the way
+  the system island separates an app from its activity. The bubble is part of the island for
+  touches (tapping it does what tapping the shell does), it grows in and retracts with the compact
+  shell, and its surface space is reserved so an activity starting or ending never resizes the
+  window. Notification and charging alerts never split: they keep the single shell.
 - **Camera hole**: the overlay knows where the physical punch-hole is (defaults: screen centre,
   26 dp down, 8 dp radius) and splits content into the two areas beside it — media art left /
   bars right, notification icon left / title right, timer and charging centred in the wider side.
