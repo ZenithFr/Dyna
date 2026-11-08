@@ -54,7 +54,7 @@
 
         <!--
             Classic AccessibilityService overlay: no root, no SYSTEM_ALERT_WINDOW needed.
-            The service only draws a window; it does not inspect window content.
+            The service draws the island and a 1 px inset probe; it does not inspect window content.
         -->
         <service
             android:name=".service.IslandService"

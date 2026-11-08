@@ -137,8 +137,17 @@ internal class IslandPillView(context: Context) : View(context) {
      */
     private val satelliteBounds = RectF()
     private val satellitePath = Path()
-    private var satelliteCornerPx = 0f
+    private val mitosisPath = Path()
+    private val neckPath = Path()
     private var satelliteShown = false
+    private var satelliteProgress = 0f
+    private var satelliteVelocity = 0f
+    private var satelliteTarget = 0f
+    private var satelliteActive = false
+    private var satelliteDrawable: Drawable? = null
+    private var previousSatelliteDrawable: Drawable? = null
+    private var satelliteSwapStartMs = 0L
+    private var satelliteSwapAnimating = false
     private var ownAppIcon: Drawable? = null
     private var ownAppIconLoaded = false
 
@@ -247,9 +256,6 @@ internal class IslandPillView(context: Context) : View(context) {
         expandedBounds.set(expandedFrame)
         dormantBounds.set(dormantFrame)
         satelliteBounds.set(satelliteFrame)
-        satelliteCornerPx = (
-            satelliteFrame.height() * SATELLITE_CORNER_FRACTION
-            ).coerceIn(0f, satelliteFrame.height() / 2f)
         dormantCornerPx = dormantFrame.height() / 2f
         this.compactCornerPx = compactCornerPx
         this.expandedCornerPx = expandedCornerPx
@@ -265,6 +271,11 @@ internal class IslandPillView(context: Context) : View(context) {
             dormantProgress = dormantTarget
             dormantVelocity = 0f
             dormantSettling = false
+            satelliteProgress = satelliteTarget
+            satelliteVelocity = 0f
+            satelliteActive = false
+        } else {
+            updateSatelliteTarget()
         }
         invalidate()
     }
@@ -283,9 +294,11 @@ internal class IslandPillView(context: Context) : View(context) {
             dormantProgress = target
             dormantVelocity = 0f
             dormantSettling = false
+            updateSatelliteTarget()
             invalidate()
             return
         }
+        updateSatelliteTarget()
         dormantSettling = true
         lastStepMs = 0L
         requestMotionRate(true)
@@ -307,6 +320,7 @@ internal class IslandPillView(context: Context) : View(context) {
         if (customization == next) return
         customization = next
         textScalePercent = customization.islandTextScalePercent
+        updateSatelliteTarget()
         invalidate()
     }
 
@@ -314,18 +328,40 @@ internal class IslandPillView(context: Context) : View(context) {
     fun setHighQualityMotion(enabled: Boolean) {
         if (highQualityMotion == enabled) return
         highQualityMotion = enabled
-        if (springActive || dormantSettling || animating || revealAnimating) requestMotionRate(true)
+        if (springActive || dormantSettling || satelliteActive || animating || revealAnimating) requestMotionRate(true)
     }
 
     /** True while the shell is still moving (expand/retract or curling into the hole). */
-    fun isMorphing(): Boolean = springActive || dormantSettling
+    fun isMorphing(): Boolean = springActive || dormantSettling || satelliteActive
+
+    /** Stops every frame source while the window is suppressed; re-entry snaps to live content. */
+    fun onHidden() {
+        removeCallbacks(settleWatchdog)
+        cancelTouch()
+        framesReady = false
+        springActive = false
+        dormantSettling = false
+        satelliteActive = false
+        widthVelocity = 0f
+        heightVelocity = 0f
+        dormantVelocity = 0f
+        satelliteVelocity = 0f
+        swapAnimating = false
+        previousContent = null
+        revealAnimating = false
+        satelliteSwapAnimating = false
+        previousSatelliteDrawable = null
+        clearSatelliteIcon()
+        targets.clear()
+        requestMotionRate(false)
+    }
 
     /**
      * Ends a morph immediately at its target. Used by the watchdog and by the owner when it needs
      * a settled frame right away; it always reports back so the window can be re-measured.
      */
     fun forceSettle() {
-        if (!springActive && !dormantSettling) return
+        if (!springActive && !dormantSettling && !satelliteActive) return
         val target = if (expanded) 1f else 0f
         widthProgress = target
         heightProgress = target
@@ -335,8 +371,15 @@ internal class IslandPillView(context: Context) : View(context) {
         dormantProgress = dormantTarget
         dormantVelocity = 0f
         dormantSettling = false
+        satelliteProgress = satelliteTarget
+        satelliteVelocity = 0f
+        satelliteActive = false
+        if (satelliteTarget == 0f) clearSatelliteIcon()
         removeCallbacks(settleWatchdog)
-        requestMotionRate(animating || revealAnimating)
+        requestMotionRate(
+            animating || revealAnimating || progressAnimating || satelliteSwapAnimating,
+            ambientOnly = animating || progressAnimating,
+        )
         post { onMorphSettled?.invoke() }
     }
 
@@ -420,9 +463,16 @@ internal class IslandPillView(context: Context) : View(context) {
         expanded = newExpanded
         animating = motionAllowed && (newContent as? IslandContent.Media)?.isPlaying == true
         progressAnimating = motionAllowed && (newContent as? IslandContent.Download)?.indeterminate == true
-        // Only persistent live activities detach their app into the bubble; a notification alert
-        // (or a transient battery/charging confirmation) keeps the single shell.
-        satelliteShown = !newExpanded && satelliteIcon(newContent) != null
+        // Keep the outgoing icon while the daughter circle re-absorbs into the shell. A new
+        // persistent activity replaces it; alerts/battery confirmations only retract it.
+        val nextSatelliteIcon = if (customization.detachedAppIcon) satelliteIcon(newContent) else null
+        if (nextSatelliteIcon != null && nextSatelliteIcon !== satelliteDrawable) {
+            previousSatelliteDrawable = satelliteDrawable
+            satelliteDrawable = nextSatelliteIcon
+            satelliteSwapStartMs = SystemClock.elapsedRealtime()
+            satelliteSwapAnimating = motionAllowed && previousSatelliteDrawable != null
+        }
+        updateSatelliteTarget()
 
         val target = if (newExpanded) 1f else 0f
         if (!motionAllowed) {
@@ -478,7 +528,7 @@ internal class IslandPillView(context: Context) : View(context) {
         if (widthPx <= 0f || heightPx <= 0f) return
 
         val now = SystemClock.elapsedRealtime()
-        if (springActive || dormantSettling) advanceMotion(now)
+        if (springActive || dormantSettling || satelliteActive) advanceMotion(now)
         val p = progress.coerceIn(0f, 1f)
         val widthCage = dormantWidthCage(dormantProgress)
         val frame = currentFrame()
@@ -489,7 +539,6 @@ internal class IslandPillView(context: Context) : View(context) {
         )
         // Contracted to a circle behind the lens it must be a circle whatever the shape setting is.
         val shellShape = if (widthCage > 0.35f) IslandShape.PILL else shape
-        drawShell(canvas, frame, corner, shellShape)
 
         // Staged content, the way the system island hands over between presentations: the shell
         // always leads, the card's content follows it in with a fade, a 6% scale-up and a few dp
@@ -511,13 +560,24 @@ internal class IslandPillView(context: Context) : View(context) {
         val outgoing = previousContent
         val swapping = outgoing != null && swapAnimating && swapT < 1f
 
-        // The detached app-icon bubble belongs to the compact presentation: it arrives with the
-        // shell and retracts as the card grows. During an activity swap the outgoing icon fades
-        // into the incoming one instead of popping out of the bubble.
-        val satelliteOut = compactOut * (1f - widthCage)
-        if (satelliteOut > 0.004f) {
-            if (swapping) drawSatellite(canvas, outgoing, satelliteOut * (1f - swapT))
-            drawSatellite(canvas, current, satelliteOut * (if (swapping) swapT else 1f))
+        val satelliteP = satelliteProgress.coerceIn(0f, 1f)
+        val satelliteVisible = satelliteDrawable != null && satelliteP > 0.001f && !satelliteBounds.isEmpty
+        val satelliteSwapT = if (satelliteSwapAnimating) {
+            ((now - satelliteSwapStartMs) / SWAP_DURATION_MS.toFloat()).coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+        if (satelliteSwapAnimating && satelliteSwapT >= 1f) {
+            satelliteSwapAnimating = false
+            previousSatelliteDrawable = null
+        }
+        if (satelliteVisible && satelliteP < IslandMotion.SATELLITE_NECK_BREAK) {
+            // One union silhouette while the neck exists: no seam, no double stroke, no fade.
+            drawShell(canvas, frame, corner, shellShape, paintShell = false)
+            drawMitosis(canvas, frame, satelliteP, satelliteSwapT)
+        } else {
+            drawShell(canvas, frame, corner, shellShape)
+            if (satelliteVisible) drawDetachedSatellite(canvas, frame, satelliteP, satelliteSwapT)
         }
         targets.clear()
 
@@ -542,7 +602,7 @@ internal class IslandPillView(context: Context) : View(context) {
         if (holeGuideVisible && holeRadiusPx > 0f) drawHoleGuide(canvas)
 
         // No hit targets while morphing: a half-grown button should never be tappable.
-        if (springActive || dormantSettling) {
+        if (springActive || dormantSettling || satelliteActive) {
             targets.clear()
         } else if (current != null && current !is IslandContent.Charging &&
             current !is IslandContent.BatteryLow && current !is IslandContent.PowerSave
@@ -552,7 +612,7 @@ internal class IslandPillView(context: Context) : View(context) {
             targets.add(0, Target(TargetKind.Body, -1, body))
             // The detached bubble is part of the island: tapping it must do what tapping the
             // shell does, never nothing.
-            if (satelliteShown && satelliteOut > 0.05f) {
+            if (satelliteShown && satelliteP > 0.995f) {
                 targets.add(0, Target(TargetKind.Body, -1, RectF(satelliteBounds)))
             }
         }
@@ -560,8 +620,10 @@ internal class IslandPillView(context: Context) : View(context) {
         val revealRunning = revealAnimating &&
             (now - revealStartMs) < REVEAL_TOTAL_MS
         if (revealAnimating && !revealRunning) revealAnimating = false
-        val busy = animating || progressAnimating || springActive || dormantSettling || revealRunning || swapAnimating
-        val ambientOnly = (animating || progressAnimating) && !springActive && !dormantSettling && !revealRunning && !swapAnimating
+        val busy = animating || progressAnimating || springActive || dormantSettling || satelliteActive ||
+            revealRunning || swapAnimating || satelliteSwapAnimating
+        val ambientOnly = (animating || progressAnimating) && !springActive && !dormantSettling &&
+            !satelliteActive && !revealRunning && !swapAnimating && !satelliteSwapAnimating
         requestMotionRate(busy, ambientOnly)
         if (busy) postInvalidateOnAnimation()
     }
@@ -693,6 +755,7 @@ internal class IslandPillView(context: Context) : View(context) {
         cornerPx: Float,
         shellShape: IslandShape,
         path: Path = shellPath,
+        paintShell: Boolean = true,
     ) {
         // On the always-on display the island is a black shape on a black screen, so only an
         // outline can be seen — and it is forced to a hairline (~2 px) instead of the user width.
@@ -705,6 +768,7 @@ internal class IslandPillView(context: Context) : View(context) {
         val innerHeight = (frame.height() - half * 2f).coerceAtLeast(1f)
         buildIslandPath(path, shellShape, innerWidth, innerHeight, cornerPx)
         path.offset(frame.left + half, frame.top + half)
+        if (!paintShell) return
         canvas.drawPath(path, shellPaint)
         if (strokeOn) {
             strokePaint.strokeWidth = strokePx
@@ -713,54 +777,161 @@ internal class IslandPillView(context: Context) : View(context) {
         }
     }
 
-    /**
-     * The detached bubble: same shell treatment and outline as the island, with the owning app's
-     * launcher icon inset inside it. [alpha] rides the compact presentation, so the bubble grows in
-     * and retracts with the shell instead of blinking on and off.
-     */
-    private fun drawSatellite(canvas: Canvas, value: IslandContent?, alpha: Float) {
-        if (alpha <= 0.004f) return
-        val icon = satelliteIcon(value) ?: return
-        val rect = satelliteBounds
-        if (rect.width() <= 0f || rect.height() <= 0f) return
+    /** Resting circle geometry interpolated from inside the trailing shell edge. */
+    private fun satelliteCenterX(frame: RectF, progress: Float, radius: Float): Float =
+        lerp(frame.right - radius, satelliteBounds.centerX(), progress)
 
-        val save = canvas.save()
-        if (alpha < 0.995f) {
-            canvas.saveLayerAlpha(
-                rect.left, rect.top, rect.right, rect.bottom,
-                (alpha * 255f).toInt().coerceIn(0, 255),
-            )
-        }
-        // A slight grow-in keeps the arrival soft without a second spring to keep in sync.
-        val scale = 0.9f + 0.1f * alpha
-        canvas.scale(scale, scale, rect.centerX(), rect.centerY())
-        drawShell(canvas, rect, satelliteCornerPx, IslandShape.PILL, path = satellitePath)
+    private fun satelliteCenterY(frame: RectF, progress: Float): Float =
+        lerp(frame.centerY(), satelliteBounds.centerY(), progress)
 
-        val pad = dp(SATELLITE_ICON_PAD_DP)
-        val iconRect = RectF(rect)
-        iconRect.inset(pad, pad)
-        canvas.save()
-        canvas.clipPath(satellitePath)
-        drawIcon(canvas, icon, iconRect)
-        canvas.restore()
-        canvas.restoreToCount(save)
+    private fun satelliteRadius(progress: Float): Float =
+        satelliteBounds.height() / 2f * (0.72f + 0.28f * progress)
+
+    private fun shellStrokeHalf(): Float {
+        val strokePx = if (aod) min(AOD_STROKE_PX, density) else strokeWidthPx
+        val strokeOn = aod || (strokeEnabled && strokeWidthPx > 0f)
+        return if (strokeOn) strokePx / 2f else 0f
     }
 
     /**
-     * Launcher icon of a *persistent* live activity: the playing app for music, our own icon for
-     * the built-in timer, the owning app for maps and downloads. Notifications and the transient
-     * charging/battery confirmations return null, so they never split the shell. Returning null
-     * here also disables the bubble's hit target, so drawing and touch can never disagree.
+     * Cell-division detach/attach: the daughter circle grows out of the shell, a Bézier neck
+     * thins and pinches off, and the same spring reverses the union on re-attachment. Path.union
+     * keeps the outline continuous; all paths are reused and no full-window layer is allocated.
      */
-    private fun satelliteIcon(value: IslandContent?): Drawable? {
-        if (!customization.detachedAppIcon) return null
-        return when (value) {
-            is IslandContent.Media -> value.appIcon
-            is IslandContent.Timer -> timerAppIcon()
-            is IslandContent.Navigation -> value.icon
-            is IslandContent.Download -> value.icon
-            else -> null
+    private fun drawMitosis(canvas: Canvas, frame: RectF, progress: Float, swapT: Float) {
+        val radius = satelliteRadius(progress)
+        val cx = satelliteCenterX(frame, progress, radius)
+        val cy = satelliteCenterY(frame, progress)
+        val half = shellStrokeHalf()
+        satellitePath.reset()
+        satellitePath.addCircle(cx, cy, (radius - half).coerceAtLeast(0f), Path.Direction.CW)
+        mitosisPath.set(shellPath)
+        mitosisPath.op(satellitePath, Path.Op.UNION)
+
+        val neck = IslandMotion.satelliteNeckShare(progress)
+        val shellRight = frame.right - half
+        val circleLeft = cx - radius + half
+        if (neck > 0.001f && circleLeft > shellRight - dp(1f)) {
+            val neckHalf = radius * 0.62f * neck
+            val startX = shellRight - dp(1f)
+            val endX = circleLeft + dp(1f)
+            val c1 = lerp(startX, endX, 0.45f)
+            val c2 = lerp(startX, endX, 0.72f)
+            val topEnd = cy - radius * 0.72f
+            val bottomEnd = cy + radius * 0.72f
+            neckPath.reset()
+            neckPath.moveTo(startX, cy - neckHalf)
+            neckPath.cubicTo(c1, cy - neckHalf, c2, topEnd, endX, topEnd)
+            neckPath.lineTo(endX, bottomEnd)
+            neckPath.cubicTo(c2, bottomEnd, c1, cy + neckHalf, startX, cy + neckHalf)
+            neckPath.close()
+            mitosisPath.op(neckPath, Path.Op.UNION)
         }
+        canvas.drawPath(mitosisPath, shellPaint)
+        if (half > 0f) {
+            strokePaint.strokeWidth = half * 2f
+            strokePaint.color = strokeColorArgb
+            canvas.drawPath(mitosisPath, strokePaint)
+        }
+        drawSatelliteIcon(canvas, cx, cy, radius, IslandMotion.satelliteIconShare(progress), swapT)
+    }
+
+    private fun drawDetachedSatellite(canvas: Canvas, frame: RectF, progress: Float, swapT: Float) {
+        val radius = satelliteRadius(progress)
+        val cx = satelliteCenterX(frame, progress, radius)
+        val cy = satelliteCenterY(frame, progress)
+        val half = shellStrokeHalf()
+        satellitePath.reset()
+        satellitePath.addCircle(cx, cy, (radius - half).coerceAtLeast(0f), Path.Direction.CW)
+        canvas.drawPath(satellitePath, shellPaint)
+        if (half > 0f) {
+            strokePaint.strokeWidth = half * 2f
+            strokePaint.color = strokeColorArgb
+            canvas.drawPath(satellitePath, strokePaint)
+        }
+        drawSatelliteIcon(canvas, cx, cy, radius, IslandMotion.satelliteIconShare(progress), swapT)
+    }
+
+    private fun drawSatelliteIcon(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        alpha: Float,
+        swapT: Float,
+    ) {
+        val icon = satelliteDrawable ?: return
+        if (alpha <= 0.004f) return
+        val size = dp(
+            IslandLayout.satelliteIconSizeDp(
+                diameterDp = radius * 2f / density,
+                paddingDp = customization.satelliteIconPaddingDp.toFloat(),
+                strokeDp = shellStrokeHalf() / density,
+            ),
+        )
+        if (size <= 0f) return
+        val rect = RectF(cx - size / 2f, cy - size / 2f, cx + size / 2f, cy + size / 2f)
+        canvas.save()
+        canvas.clipPath(satellitePath)
+        val previous = previousSatelliteDrawable
+        if (previous != null && swapT < 1f) drawSatelliteIconLayer(canvas, previous, rect, alpha * (1f - swapT))
+        drawSatelliteIconLayer(canvas, icon, rect, alpha * (if (previous != null) swapT else 1f))
+        canvas.restore()
+    }
+
+    private fun drawSatelliteIconLayer(canvas: Canvas, icon: Drawable, rect: RectF, alpha: Float) {
+        if (alpha <= 0.004f) return
+        val save = if (alpha < 0.995f) {
+            canvas.saveLayerAlpha(rect.left, rect.top, rect.right, rect.bottom, (alpha * 255f).toInt().coerceIn(0, 255))
+        } else {
+            canvas.save()
+        }
+        drawIcon(canvas, icon, rect)
+        canvas.restoreToCount(save)
+    }
+
+    private fun updateSatelliteTarget() {
+        val eligible = customization.detachedAppIcon && !expanded && dormantTarget == 0f &&
+            !satelliteBounds.isEmpty && satelliteIcon(content) != null
+        val target = if (eligible) 1f else 0f
+        satelliteShown = eligible
+        if (satelliteTarget == target && !satelliteActive) return
+        satelliteTarget = target
+        if (!framesReady) return
+        if (!motionAllowed) {
+            satelliteProgress = target
+            satelliteVelocity = 0f
+            satelliteActive = false
+            satelliteSwapAnimating = false
+            previousSatelliteDrawable = null
+            if (target == 0f) clearSatelliteIcon()
+            invalidate()
+            return
+        }
+        if (abs(satelliteProgress - target) > 0.001f || abs(satelliteVelocity) > 0.05f) {
+            satelliteActive = true
+            lastStepMs = 0L
+            requestMotionRate(true)
+            removeCallbacks(settleWatchdog)
+            postDelayed(settleWatchdog, MORPH_WATCHDOG_MS)
+            invalidate()
+        }
+    }
+
+    private fun clearSatelliteIcon() {
+        satelliteDrawable = null
+        previousSatelliteDrawable = null
+        satelliteSwapAnimating = false
+        satelliteShown = false
+    }
+
+    /** Persistent live activities only; transient alerts and battery confirmations never split. */
+    private fun satelliteIcon(value: IslandContent?): Drawable? = when (value) {
+        is IslandContent.Media -> value.appIcon
+        is IslandContent.Timer -> timerAppIcon()
+        is IslandContent.Navigation -> value.icon
+        is IslandContent.Download -> value.icon
+        else -> null
     }
 
     /** The island's own launcher icon, loaded once. */
@@ -831,6 +1002,22 @@ internal class IslandPillView(context: Context) : View(context) {
             }
         }
 
+        if (satelliteActive) {
+            stepSpring(
+                satelliteProgress, satelliteVelocity, satelliteTarget,
+                IslandMotion.SATELLITE_OMEGA * (customization.motionScalePercent / 100f),
+                IslandMotion.SATELLITE_ZETA, dt,
+            )
+            satelliteProgress = springOut[0]
+            satelliteVelocity = springOut[1]
+            if (abs(satelliteTarget - satelliteProgress) < 0.0015f && abs(satelliteVelocity) < 0.05f) {
+                satelliteProgress = satelliteTarget
+                satelliteVelocity = 0f
+                satelliteActive = false
+                if (satelliteTarget == 0f) clearSatelliteIcon()
+            }
+        }
+
         if (dormantSettling) {
             stepSpring(
                 dormantProgress, dormantVelocity, dormantTarget,
@@ -847,9 +1034,12 @@ internal class IslandPillView(context: Context) : View(context) {
             }
         }
 
-        if (!springActive && !dormantSettling) {
+        if (!springActive && !dormantSettling && !satelliteActive) {
             removeCallbacks(settleWatchdog)
-            requestMotionRate(animating || revealAnimating || progressAnimating, ambientOnly = animating || progressAnimating)
+            requestMotionRate(
+                animating || revealAnimating || progressAnimating || satelliteSwapAnimating,
+                ambientOnly = animating || progressAnimating,
+            )
             // Let the owner re-place the touch window now that the shell is at rest.
             post { onMorphSettled?.invoke() }
         }
@@ -965,41 +1155,27 @@ internal class IslandPillView(context: Context) : View(context) {
         paint.alpha = alpha
     }
 
-    /**
-     * Two disjoint areas flanking the hole (6 dp clearance) when it intersects the pill, or one
-     * area covering the whole pill. With the hole at an edge (ONE_SIDE) only that side exists and
-     * everything is laid out inside it.
-     */
+    /** Safe compact regions from the shared dp layout: edge padding + lens clearance, never under the hole. */
     private fun contentAreas(
         widthPx: Float,
         heightPx: Float,
         holeX: Float = holeCenterX,
         holeY: Float = holeCenterY,
     ): Areas {
-        val whole = RectF(0f, 0f, widthPx, heightPx)
-        if (holeRadiusPx <= 0f) return Areas(null, null, whole)
-
-        val holeLeft = holeX - holeRadiusPx
-        val holeRight = holeX + holeRadiusPx
-        val holeTop = holeY - holeRadiusPx
-        val holeBottom = holeY + holeRadiusPx
-        // The hole is outside the pill (horizontally or vertically): no avoidance needed.
-        if (holeRight <= 0f || holeLeft >= widthPx || holeBottom <= 0f || holeTop >= heightPx) {
-            return Areas(null, null, whole)
-        }
-
-        val gap = dp(customization.sensorClearanceDp.toFloat())
-        val minWidth = dp(18f)
-        val left = RectF(0f, 0f, (holeLeft - gap).coerceAtLeast(0f), heightPx)
-        val right = RectF((holeRight + gap).coerceAtMost(widthPx), 0f, widthPx, heightPx)
-        val leftOk = left.width() >= minWidth
-        val rightOk = right.width() >= minWidth
-        return when {
-            leftOk && rightOk -> Areas(left, right, whole)
-            leftOk -> Areas(null, null, left)
-            rightOk -> Areas(null, null, right)
-            else -> Areas(null, null, whole)
-        }
+        val regions = IslandLayout.compactAreas(
+            widthDp = widthPx / density,
+            heightDp = heightPx / density,
+            edgePaddingDp = customization.compactEdgePaddingDp.toFloat(),
+            holeEnabled = holeRadiusPx > 0f,
+            holeCenterXDp = holeX / density,
+            holeCenterYDp = holeY / density,
+            holeRadiusDp = holeRadiusPx / density,
+            sensorClearanceDp = customization.sensorClearanceDp.toFloat(),
+        )
+        fun rect(region: IslandLayout.CompactRegion): RectF = RectF(
+            region.left * density, region.top * density, region.right * density, region.bottom * density,
+        )
+        return Areas(regions.leading?.let(::rect), regions.trailing?.let(::rect), rect(regions.single))
     }
 
     /** Full-width region below the sensor; unlike compact content it is never split into columns. */
@@ -1045,14 +1221,13 @@ internal class IslandPillView(context: Context) : View(context) {
             val right = areas.right!!
             canvas.inArea(left) { drawCompactArt(canvas, media, left, heightPx) }
             canvas.inArea(right) {
-                val pad = dp(7f)
-                drawPlayingBars(canvas, right.left + pad, right.right - pad, heightPx, media.accentColor)
+                drawPlayingBars(canvas, right.left, right.right, heightPx, media.accentColor)
             }
         } else {
             val area = areas.single
             canvas.inArea(area) {
                 val artRect = drawCompactArt(canvas, media, area, heightPx)
-                drawPlayingBars(canvas, artRect.right + dp(8f), area.right - dp(7f), heightPx, media.accentColor)
+                drawPlayingBars(canvas, artRect.right + dp(6f), area.right, heightPx, media.accentColor)
             }
         }
     }
@@ -1063,15 +1238,12 @@ internal class IslandPillView(context: Context) : View(context) {
         area: RectF,
         heightPx: Float,
     ): RectF {
-        val pad = dp(7f)
-        val available = (area.width() - pad * 2f).coerceAtLeast(dp(10f))
-        val artSize = (heightPx - pad * 2f)
-            .coerceAtMost(dp(28f))
-            .coerceAtLeast(dp(14f))
-            .coerceAtMost(available)
-        val left = area.left + pad
-        val artRect = RectF(left, (heightPx - artSize) / 2f, left + artSize, (heightPx + artSize) / 2f)
-        drawArt(canvas, artRect, dp(5f), media.albumArt)
+        val artSize = dp(
+            IslandLayout.fitIconSizeDp(customization.compactIconSizeDp.toFloat(), area.width() / density, area.height() / density),
+        )
+        val left = if (area.width() > artSize + dp(12f)) area.left else area.centerX() - artSize / 2f
+        val artRect = RectF(left, area.centerY() - artSize / 2f, left + artSize, area.centerY() + artSize / 2f)
+        drawArt(canvas, artRect, artSize * 0.25f, media.albumArt)
         return artRect
     }
 
@@ -1153,23 +1325,24 @@ internal class IslandPillView(context: Context) : View(context) {
         areas: Areas,
         heightPx: Float,
     ) {
-        val iconSize = (heightPx - dp(12f)).coerceIn(dp(14f), dp(20f))
         if (areas.split) {
             val left = areas.left!!
             val right = areas.right!!
-            val iconLeft = left.centerX() - iconSize / 2f
+            val fitted = compactGlyphSize(left, customization.compactIconSizeDp.toFloat())
+            val iconLeft = left.centerX() - fitted / 2f
             canvas.inArea(left) {
-                drawIcon(canvas, notification.icon, RectF(iconLeft, (heightPx - iconSize) / 2f, iconLeft + iconSize, (heightPx + iconSize) / 2f))
+                drawIcon(canvas, notification.icon, RectF(iconLeft, (heightPx - fitted) / 2f, iconLeft + fitted, (heightPx + fitted) / 2f))
             }
             canvas.inArea(right) {
-                drawCompactNotificationTitle(canvas, notification.title, right.left + dp(4f), right.right - dp(7f), heightPx)
+                drawCompactNotificationTitle(canvas, notification.title, right.left, right.right, heightPx)
             }
         } else {
             val area = areas.single
             canvas.inArea(area) {
-                val iconLeft = area.left + dp(7f)
-                drawIcon(canvas, notification.icon, RectF(iconLeft, (heightPx - iconSize) / 2f, iconLeft + iconSize, (heightPx + iconSize) / 2f))
-                drawCompactNotificationTitle(canvas, notification.title, iconLeft + iconSize + dp(6f), area.right - dp(7f), heightPx)
+                val fitted = compactGlyphSize(area, customization.compactIconSizeDp.toFloat())
+                val iconLeft = area.left
+                drawIcon(canvas, notification.icon, RectF(iconLeft, (heightPx - fitted) / 2f, iconLeft + fitted, (heightPx + fitted) / 2f))
+                drawCompactNotificationTitle(canvas, notification.title, iconLeft + fitted + dp(6f), area.right, heightPx)
             }
         }
     }
@@ -1182,7 +1355,8 @@ internal class IslandPillView(context: Context) : View(context) {
         heightPx: Float,
     ) {
         titlePaint.textSize = sp(11.5f)
-        val available = (right - left).coerceAtLeast(dp(12f))
+        if (right <= left) return
+        val available = right - left
         val line = TextUtils.ellipsize(title, titlePaint, available, TextUtils.TruncateAt.END)
         val baseline = heightPx / 2f - (titlePaint.descent() + titlePaint.ascent()) / 2f
         drawFluidText(canvas, line, left, baseline, titlePaint)
@@ -1241,10 +1415,11 @@ internal class IslandPillView(context: Context) : View(context) {
         chargingPaint.textSize = sp(13f)
         chargingPaint.color = Color.WHITE
         if (areas.split) {
-            canvas.inArea(areas.left!!) { drawBolt(canvas, areas.left.centerX(), heightPx / 2f, dp(16f)) }
+            val left = areas.left!!
+            canvas.inArea(left) { drawBolt(canvas, left.centerX(), heightPx / 2f, compactGlyphSize(left, 16f)) }
             canvas.inArea(areas.right!!) {
                 val width = chargingPaint.measureText(text)
-                val scale = ((areas.right.width() - dp(8f)) / width.coerceAtLeast(1f)).coerceAtMost(1f)
+                val scale = (areas.right.width() / width.coerceAtLeast(1f)).coerceAtMost(1f)
                 canvas.save()
                 canvas.scale(scale, scale, areas.right.centerX(), heightPx / 2f)
                 val baseline = heightPx / 2f - (chargingPaint.descent() + chargingPaint.ascent()) / 2f
@@ -1258,7 +1433,7 @@ internal class IslandPillView(context: Context) : View(context) {
                 val gap = dp(6f)
                 val width = chargingPaint.measureText(text)
                 val total = bolt + gap + width
-                val scale = ((area.width() - dp(12f)) / total.coerceAtLeast(1f)).coerceAtMost(1f)
+                val scale = (area.width() / total.coerceAtLeast(1f)).coerceAtMost(1f)
                 canvas.save()
                 canvas.translate(area.centerX(), heightPx / 2f)
                 canvas.scale(scale, scale)
@@ -1294,11 +1469,12 @@ internal class IslandPillView(context: Context) : View(context) {
         chargingPaint.textSize = sp(13f)
         chargingPaint.color = customization.timerColorArgb
         if (areas.split) {
-            canvas.inArea(areas.left!!) { drawTimerGlyph(canvas, areas.left.centerX(), heightPx / 2f, dp(15f), paused) }
+            val left = areas.left!!
+            canvas.inArea(left) { drawTimerGlyph(canvas, left.centerX(), heightPx / 2f, compactGlyphSize(left, 15f), paused) }
             canvas.inArea(areas.right!!) {
                 val text = timer.displayTime
                 val width = chargingPaint.measureText(text)
-                val scale = ((areas.right.width() - dp(6f)) / width.coerceAtLeast(1f)).coerceAtMost(1f)
+                val scale = (areas.right.width() / width.coerceAtLeast(1f)).coerceAtMost(1f)
                 canvas.save()
                 canvas.scale(scale, scale, areas.right.centerX(), heightPx / 2f)
                 val baseline = heightPx / 2f - (chargingPaint.descent() + chargingPaint.ascent()) / 2f
@@ -1313,7 +1489,7 @@ internal class IslandPillView(context: Context) : View(context) {
                 val text = timer.displayTime
                 val width = chargingPaint.measureText(text)
                 val total = glyph + gap + width
-                val scale = ((area.width() - dp(10f)) / total.coerceAtLeast(1f)).coerceAtMost(1f)
+                val scale = (area.width() / total.coerceAtLeast(1f)).coerceAtMost(1f)
                 canvas.save()
                 canvas.translate(area.centerX(), heightPx / 2f)
                 canvas.scale(scale, scale)
@@ -1434,28 +1610,33 @@ internal class IslandPillView(context: Context) : View(context) {
         heightPx: Float,
         color: Int,
     ) {
-        val iconSize = (heightPx - dp(12f)).coerceIn(dp(14f), dp(20f))
+        val iconSize = dp(
+            IslandLayout.fitIconSizeDp(customization.compactIconSizeDp.toFloat(), areas.widest.width() / density, areas.widest.height() / density),
+        )
         titlePaint.textSize = sp(11.5f)
         titlePaint.color = color
         if (areas.split) {
             val left = areas.left!!
             val right = areas.right!!
             canvas.inArea(left) {
-                val l = left.centerX() - iconSize / 2f
-                drawIcon(canvas, icon, RectF(l, (heightPx - iconSize) / 2f, l + iconSize, (heightPx + iconSize) / 2f))
+                val fitted = compactGlyphSize(left, customization.compactIconSizeDp.toFloat())
+                val l = left.centerX() - fitted / 2f
+                drawIcon(canvas, icon, RectF(l, (heightPx - fitted) / 2f, l + fitted, (heightPx + fitted) / 2f))
             }
             canvas.inArea(right) {
-                val available = (right.width() - dp(10f)).coerceAtLeast(dp(12f))
+                val available = right.width()
+                if (available <= 0f) return@inArea
                 val line = TextUtils.ellipsize(text, titlePaint, available, TextUtils.TruncateAt.END)
                 val baseline = heightPx / 2f - (titlePaint.descent() + titlePaint.ascent()) / 2f
-                canvas.drawText(line, 0, line.length, right.left + dp(4f), baseline, titlePaint)
+                canvas.drawText(line, 0, line.length, right.left, baseline, titlePaint)
             }
         } else {
             val area = areas.single
             canvas.inArea(area) {
-                val l = area.left + dp(7f)
+                val l = area.left
                 drawIcon(canvas, icon, RectF(l, (heightPx - iconSize) / 2f, l + iconSize, (heightPx + iconSize) / 2f))
-                val available = (area.right - l - iconSize - dp(12f)).coerceAtLeast(dp(12f))
+                val available = (area.right - l - iconSize - dp(6f)).coerceAtLeast(0f)
+                if (available <= 0f) return@inArea
                 val line = TextUtils.ellipsize(text, titlePaint, available, TextUtils.TruncateAt.END)
                 val baseline = heightPx / 2f - (titlePaint.descent() + titlePaint.ascent()) / 2f
                 canvas.drawText(line, 0, line.length, l + iconSize + dp(6f), baseline, titlePaint)
@@ -1482,12 +1663,13 @@ internal class IslandPillView(context: Context) : View(context) {
     private fun drawBatteryStatus(canvas: Canvas, text: String, color: Int, areas: Areas, heightPx: Float, fill: Float) {
         chargingPaint.textSize = sp(12f)
         chargingPaint.color = Color.WHITE
-        val glyphWidth = dp(18f)
+        val glyphWidth = compactGlyphSize(areas.widest, 18f)
         if (areas.split) {
-            canvas.inArea(areas.left!!) { drawBatteryGlyph(canvas, areas.left.centerX(), heightPx / 2f, glyphWidth, color, fill) }
+            val left = areas.left!!
+            canvas.inArea(left) { drawBatteryGlyph(canvas, left.centerX(), heightPx / 2f, glyphWidth, color, fill) }
             canvas.inArea(areas.right!!) {
                 val width = chargingPaint.measureText(text)
-                val scale = ((areas.right.width() - dp(8f)) / width.coerceAtLeast(1f)).coerceAtMost(1f)
+                val scale = (areas.right.width() / width.coerceAtLeast(1f)).coerceAtMost(1f)
                 canvas.save()
                 canvas.scale(scale, scale, areas.right.centerX(), heightPx / 2f)
                 val baseline = heightPx / 2f - (chargingPaint.descent() + chargingPaint.ascent()) / 2f
@@ -1500,7 +1682,7 @@ internal class IslandPillView(context: Context) : View(context) {
                 val gap = dp(6f)
                 val width = chargingPaint.measureText(text)
                 val total = glyphWidth + gap + width
-                val scale = ((area.width() - dp(12f)) / total.coerceAtLeast(1f)).coerceAtMost(1f)
+                val scale = (area.width() / total.coerceAtLeast(1f)).coerceAtMost(1f)
                 canvas.save()
                 canvas.translate(area.centerX(), heightPx / 2f)
                 canvas.scale(scale, scale)
@@ -1511,6 +1693,10 @@ internal class IslandPillView(context: Context) : View(context) {
             }
         }
     }
+
+    private fun compactGlyphSize(area: RectF, requestedDp: Float): Float = dp(
+        IslandLayout.fitIconSizeDp(requestedDp, area.width() / density, area.height() / density),
+    )
 
     private fun drawBatteryGlyph(canvas: Canvas, cx: Float, cy: Float, width: Float, color: Int, fill: Float) {
         accentStrokePaint.color = color
@@ -1705,10 +1891,12 @@ internal class IslandPillView(context: Context) : View(context) {
     }
 
     private fun drawPlayingBars(canvas: Canvas, left: Float, right: Float, heightPx: Float, color: Int = Color.WHITE) {
-        val available = (right - left).coerceAtLeast(dp(10f))
-        val barWidth = dp(2.6f)
-        val gap = dp(2.4f)
+        val available = right - left
+        if (available <= 0f) return
         val count = 3
+        val fit = min(1f, available / (dp(2.6f) * count + dp(2.4f) * (count - 1)))
+        val barWidth = dp(2.6f) * fit
+        val gap = dp(2.4f) * fit
         val total = barWidth * count + gap * (count - 1)
         var x = left + ((available - total) / 2f).coerceAtLeast(0f)
         val maxHeight = (heightPx * 0.44f).coerceAtMost(dp(22f))
@@ -1939,13 +2127,6 @@ internal class IslandPillView(context: Context) : View(context) {
     private fun lerp(from: Float, to: Float, t: Float): Float = from + (to - from) * t
 
     private companion object {
-        /**
-         * Detached app-icon bubble: squircle corner as a fraction of its height (0.34 keeps it a
-         * rounded square rather than a circle) and the icon inset inside the shell.
-         */
-        const val SATELLITE_CORNER_FRACTION = 0.34f
-        const val SATELLITE_ICON_PAD_DP = 5f
-
         /** Always-on display outline: at most 1 dp and never more than 2 physical px. */
         const val AOD_STROKE_PX = 2f
 
@@ -1954,7 +2135,5 @@ internal class IslandPillView(context: Context) : View(context) {
 
         const val SWAP_DURATION_MS = IslandMotion.SWAP_DURATION_MS
         val REVEAL_TOTAL_MS = IslandMotion.REVEAL_DURATION_MS.toLong()
-        const val customization.timerColorArgb = 0xFFFF9F0A.toInt()
-        const val customization.chargingColorArgb = 0xFF30D158.toInt()
     }
 }

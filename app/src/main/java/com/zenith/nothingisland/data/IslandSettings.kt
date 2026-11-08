@@ -33,6 +33,7 @@ data class IslandSettings(
     val strokeWidthDp: Int = DEFAULT_STROKE_WIDTH_DP,
     val strokeColorArgb: Int = DEFAULT_STROKE_COLOR_ARGB,
     val hideInFullscreen: Boolean = DEFAULT_HIDE_IN_FULLSCREEN,
+    val hideInLandscape: Boolean = DEFAULT_HIDE_IN_LANDSCAPE,
     val lockPortrait: Boolean = DEFAULT_LOCK_PORTRAIT,
     val holeEnabled: Boolean = DEFAULT_HOLE_ENABLED,
     val holeCenterXDp: Int = DEFAULT_HOLE_CENTER_X_DP,
@@ -73,6 +74,10 @@ data class IslandSettings(
     /** Persistent live activities detach their owning app icon into a bubble beside the shell. */
     val detachedAppIcon: Boolean = true,
     val satelliteGapDp: Int = DEFAULT_SATELLITE_GAP_DP,
+    val satelliteSizeDp: Int = DEFAULT_SATELLITE_SIZE_DP,
+    val satelliteIconPaddingDp: Int = DEFAULT_SATELLITE_ICON_PADDING_DP,
+    val compactIconSizeDp: Int = DEFAULT_COMPACT_ICON_SIZE_DP,
+    val compactEdgePaddingDp: Int = DEFAULT_COMPACT_EDGE_PADDING_DP,
 
     // Motion / performance. Morphs use the panel's high-rate hint; ambient loops can run slower.
     val ambientFrameRateHz: Int = DEFAULT_AMBIENT_FRAME_RATE_HZ,
@@ -113,6 +118,10 @@ data class IslandSettings(
         sensorClearanceDp = sensorClearanceDp.coerceIn(SENSOR_CLEARANCE_RANGE),
         islandTextScalePercent = islandTextScalePercent.coerceIn(ISLAND_TEXT_SCALE_RANGE),
         satelliteGapDp = satelliteGapDp.coerceIn(SATELLITE_GAP_RANGE),
+        satelliteSizeDp = satelliteSizeDp.coerceIn(SATELLITE_SIZE_RANGE),
+        satelliteIconPaddingDp = satelliteIconPaddingDp.coerceIn(SATELLITE_ICON_PADDING_RANGE),
+        compactIconSizeDp = compactIconSizeDp.coerceIn(COMPACT_ICON_SIZE_RANGE),
+        compactEdgePaddingDp = compactEdgePaddingDp.coerceIn(COMPACT_EDGE_PADDING_RANGE),
         ambientFrameRateHz = ambientFrameRateHz.coerceIn(AMBIENT_FRAME_RATE_RANGE),
         motionScalePercent = motionScalePercent.coerceIn(MOTION_SCALE_RANGE),
         disabledPackages = disabledPackages.toSet(),
@@ -139,6 +148,10 @@ data class IslandSettings(
         val SENSOR_CLEARANCE_RANGE = 2..8
         val ISLAND_TEXT_SCALE_RANGE = 90..130
         val SATELLITE_GAP_RANGE = 4..20
+        val SATELLITE_SIZE_RANGE = 24..48
+        val SATELLITE_ICON_PADDING_RANGE = 0..8
+        val COMPACT_ICON_SIZE_RANGE = 12..28
+        val COMPACT_EDGE_PADDING_RANGE = 4..16
         val AMBIENT_FRAME_RATE_RANGE = 30..120
         val MOTION_SCALE_RANGE = 50..150
 
@@ -151,6 +164,7 @@ data class IslandSettings(
         const val DEFAULT_STROKE_WIDTH_DP = 1
         const val DEFAULT_STROKE_COLOR_ARGB = 0x26FFFFFF
         const val DEFAULT_HIDE_IN_FULLSCREEN = true
+        const val DEFAULT_HIDE_IN_LANDSCAPE = true
         const val DEFAULT_LOCK_PORTRAIT = true
         const val DEFAULT_HOLE_ENABLED = true
         const val DEFAULT_HOLE_CENTER_X_DP = 0
@@ -173,6 +187,10 @@ data class IslandSettings(
         const val DEFAULT_SENSOR_CLEARANCE_DP = 4
         const val DEFAULT_ISLAND_TEXT_SCALE_PERCENT = 100
         const val DEFAULT_SATELLITE_GAP_DP = 8
+        const val DEFAULT_SATELLITE_SIZE_DP = 32
+        const val DEFAULT_SATELLITE_ICON_PADDING_DP = 3
+        const val DEFAULT_COMPACT_ICON_SIZE_DP = 20
+        const val DEFAULT_COMPACT_EDGE_PADDING_DP = 8
         const val DEFAULT_AMBIENT_FRAME_RATE_HZ = 60
         const val DEFAULT_MOTION_SCALE_PERCENT = 100
         const val DEFAULT_TIMER_COLOR_ARGB = 0xFFFF9F0A.toInt()
@@ -213,6 +231,7 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.strokeWidth] = next.strokeWidthDp
             preferences[Keys.strokeColor] = next.strokeColorArgb
             preferences[Keys.hideInFullscreen] = next.hideInFullscreen
+            preferences[Keys.hideInLandscape] = next.hideInLandscape
             preferences[Keys.lockPortrait] = next.lockPortrait
             preferences[Keys.holeEnabled] = next.holeEnabled
             preferences[Keys.holeCenterX] = next.holeCenterXDp
@@ -246,6 +265,10 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.islandTextScale] = next.islandTextScalePercent
             preferences[Keys.detachedAppIcon] = next.detachedAppIcon
             preferences[Keys.satelliteGap] = next.satelliteGapDp
+            preferences[Keys.satelliteSize] = next.satelliteSizeDp
+            preferences[Keys.satelliteIconPadding] = next.satelliteIconPaddingDp
+            preferences[Keys.compactIconSize] = next.compactIconSizeDp
+            preferences[Keys.compactEdgePadding] = next.compactEdgePaddingDp
             preferences[Keys.ambientFrameRate] = next.ambientFrameRateHz
             preferences[Keys.motionScale] = next.motionScalePercent
             preferences[Keys.timerColor] = next.timerColorArgb
@@ -269,6 +292,7 @@ class IslandSettingsRepository private constructor(private val context: Context)
     suspend fun setStrokeWidthDp(value: Int) = update { it.copy(strokeWidthDp = value) }
     suspend fun setStrokeColorArgb(argb: Int) = update { it.copy(strokeColorArgb = argb) }
     suspend fun setHideInFullscreen(enabled: Boolean) = update { it.copy(hideInFullscreen = enabled) }
+    suspend fun setHideInLandscape(enabled: Boolean) = update { it.copy(hideInLandscape = enabled) }
     suspend fun setLockPortrait(enabled: Boolean) = update { it.copy(lockPortrait = enabled) }
     suspend fun setHoleEnabled(enabled: Boolean) = update { it.copy(holeEnabled = enabled) }
     suspend fun setHoleCenterXDp(value: Int) = update { it.copy(holeCenterXDp = value) }
@@ -304,6 +328,7 @@ private object Keys {
     val strokeWidth = intPreferencesKey("stroke_width_dp")
     val strokeColor = intPreferencesKey("stroke_color_argb")
     val hideInFullscreen = booleanPreferencesKey("hide_in_fullscreen")
+    val hideInLandscape = booleanPreferencesKey("hide_in_landscape")
     val lockPortrait = booleanPreferencesKey("lock_portrait")
     val holeEnabled = booleanPreferencesKey("hole_enabled")
     val holeCenterX = intPreferencesKey("hole_center_x_dp")
@@ -337,6 +362,10 @@ private object Keys {
     val islandTextScale = intPreferencesKey("island_text_scale_percent")
     val detachedAppIcon = booleanPreferencesKey("detached_app_icon")
     val satelliteGap = intPreferencesKey("satellite_gap_dp")
+    val satelliteSize = intPreferencesKey("satellite_size_dp")
+    val satelliteIconPadding = intPreferencesKey("satellite_icon_padding_dp")
+    val compactIconSize = intPreferencesKey("compact_icon_size_dp")
+    val compactEdgePadding = intPreferencesKey("compact_edge_padding_dp")
     val ambientFrameRate = intPreferencesKey("ambient_frame_rate_hz")
     val motionScale = intPreferencesKey("motion_scale_percent")
     val timerColor = intPreferencesKey("timer_color_argb")
@@ -360,6 +389,7 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     strokeWidthDp = this[Keys.strokeWidth] ?: IslandSettings.DEFAULT_STROKE_WIDTH_DP,
     strokeColorArgb = this[Keys.strokeColor] ?: IslandSettings.DEFAULT_STROKE_COLOR_ARGB,
     hideInFullscreen = this[Keys.hideInFullscreen] ?: IslandSettings.DEFAULT_HIDE_IN_FULLSCREEN,
+    hideInLandscape = this[Keys.hideInLandscape] ?: IslandSettings.DEFAULT_HIDE_IN_LANDSCAPE,
     lockPortrait = this[Keys.lockPortrait] ?: IslandSettings.DEFAULT_LOCK_PORTRAIT,
     holeEnabled = this[Keys.holeEnabled] ?: IslandSettings.DEFAULT_HOLE_ENABLED,
     holeCenterXDp = this[Keys.holeCenterX] ?: IslandSettings.DEFAULT_HOLE_CENTER_X_DP,
@@ -393,6 +423,10 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     islandTextScalePercent = this[Keys.islandTextScale] ?: IslandSettings.DEFAULT_ISLAND_TEXT_SCALE_PERCENT,
     detachedAppIcon = this[Keys.detachedAppIcon] ?: true,
     satelliteGapDp = this[Keys.satelliteGap] ?: IslandSettings.DEFAULT_SATELLITE_GAP_DP,
+    satelliteSizeDp = this[Keys.satelliteSize] ?: IslandSettings.DEFAULT_SATELLITE_SIZE_DP,
+    satelliteIconPaddingDp = this[Keys.satelliteIconPadding] ?: IslandSettings.DEFAULT_SATELLITE_ICON_PADDING_DP,
+    compactIconSizeDp = this[Keys.compactIconSize] ?: IslandSettings.DEFAULT_COMPACT_ICON_SIZE_DP,
+    compactEdgePaddingDp = this[Keys.compactEdgePadding] ?: IslandSettings.DEFAULT_COMPACT_EDGE_PADDING_DP,
     ambientFrameRateHz = this[Keys.ambientFrameRate] ?: IslandSettings.DEFAULT_AMBIENT_FRAME_RATE_HZ,
     motionScalePercent = this[Keys.motionScale] ?: IslandSettings.DEFAULT_MOTION_SCALE_PERCENT,
     timerColorArgb = this[Keys.timerColor] ?: IslandSettings.DEFAULT_TIMER_COLOR_ARGB,

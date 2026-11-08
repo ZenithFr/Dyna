@@ -19,10 +19,10 @@ The logical width lands close to the 393 dp Apple screen class, so the expanded 
 | Charging / battery low / power saver | Sticky battery + PowerManager broadcasts | Implemented |
 | Downloads / transfers / Live Update-style progress | EXTRA_PROGRESS / ProgressStyle-compatible extras | Implemented |
 | Maps / turn-by-turn | CATEGORY_NAVIGATION + maps package hints | Implemented (generic, no private SDK) |
-| Detached app-icon bubble beside the compact shell | Persistent live activity + launcher icon | Implemented (`master` `bae7fc3`, reconciled) |
+| Detached app-icon circle beside the compact shell | Persistent live activity + launcher icon + mitosis spring | Implemented |
 | Detached minimal *second* activity (two at once) | Needs multi-slot renderer/window policy | Roadmap |
 | Tap opens app / long-press expands | README currently tap-to-expand | Preserved deliberately |
-| Fullscreen hiding | Needs privacy-safe window tracking | Roadmap stub |
+| Landscape / fullscreen hiding | Display metrics + own-probe status-bar insets | Implemented; no window-content access |
 
 ## Shizuku decision
 
@@ -39,7 +39,8 @@ be feature-flagged and never required for the core island.
 - Per-app opt-outs for WhatsApp, Instagram, Snapchat, Telegram, Messenger, Discord, Spotify,
   YouTube Music, Google Maps, Waze, Nothing Camera, Chrome, Play Store, system downloads.
 - Geometry: compact width/height/corner/offsets, hole calibration, expanded max width/corner,
-  content margin, lens clearance, island text scale, detached app-icon bubble on/off + gap.
+  content margin, lens clearance, island text scale, compact icon size/edge padding, detached
+  circle on/off + diameter/gap/icon inset, landscape/fullscreen hiding.
 - Motion: 120 Hz morph hint, ambient loop rate, motion speed, idle contraction delay, portrait lock.
 - Colour: shell stroke plus timer/charging/battery-low/power-saver/call answer/decline/download/maps accents.
 
@@ -50,7 +51,8 @@ be feature-flagged and never required for the core island.
 - Closed-form springs: same trajectory at 60/120 Hz, velocity preserved on reversal.
 - Whole-line text replacement; no per-glyph shaping/substring allocation.
 - Artwork downscaled/accent-sampled only when bitmap identity changes.
-- Hit targets only at rest; input window removed for non-interactive battery confirmations.
+- Hit targets only at rest; input window removed for non-interactive battery confirmations and suppression.
+- Mitosis reuses shell/circle/neck paths; icon crossfade layers are bounded to the icon box.
 - No polling: MediaController callbacks, notification listener, sticky battery/power broadcasts.
 
 Device verification still required:
@@ -65,6 +67,5 @@ adb shell settings put system animator_duration_scale 0   # restore afterwards
 1. Detached minimal bubble for a *second* simultaneous activity (timer + media). The
    single-activity app-icon bubble already shipped on `master` and is reconciled here.
 2. Long-press expand / tap-open gesture mode, optional and documented.
-3. Privacy-safe fullscreen rule.
-4. Richer maps maneuver icons via public notification large icons / ProgressStyle tracker icons.
-5. Optional Shizuku module for OS elements without public APIs.
+3. Richer maps maneuver icons via public notification large icons / ProgressStyle tracker icons.
+4. Optional Shizuku module for OS elements without public APIs.

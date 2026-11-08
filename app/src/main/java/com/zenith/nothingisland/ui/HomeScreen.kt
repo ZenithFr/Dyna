@@ -156,6 +156,21 @@ fun HomeScreen(
         MotionPerformancePanel(settings = settings, onSettingsChange = onSettingsChange)
 
         Spacer(Modifier.height(36.dp))
+        SectionLabel("Display behaviour")
+        Spacer(Modifier.height(10.dp))
+        DisplayBehaviorPanel(settings = settings, onSettingsChange = onSettingsChange)
+
+        Spacer(Modifier.height(36.dp))
+        SectionLabel("Compact layout")
+        Spacer(Modifier.height(10.dp))
+        CompactLayoutPanel(settings = settings, onSettingsChange = onSettingsChange)
+
+        Spacer(Modifier.height(36.dp))
+        SectionLabel("Detached app icon")
+        Spacer(Modifier.height(10.dp))
+        DetachedIconPanel(settings = settings, onSettingsChange = onSettingsChange)
+
+        Spacer(Modifier.height(36.dp))
         SectionLabel("Expanded card & colours")
         Spacer(Modifier.height(10.dp))
         ExpandedAppearancePanel(settings = settings, onSettingsChange = onSettingsChange)
@@ -938,28 +953,6 @@ private fun CalibrationPanel(
                 modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
             )
         }
-        HorizontalDivider(color = NothingHairline, thickness = 1.dp)
-        ToggleRow(
-            title = "Motion at 120 Hz",
-            description = "On Android 15+, motion requests 120 Hz while moving and drops to 0 at rest. " +
-                "Off requests 90 Hz. Android 12–14 follows the panel's normal vsync.",
-            checked = settings.highQualityMotion,
-            onCheckedChange = { checked -> onSettingsChange { it.copy(highQualityMotion = checked) } },
-        )
-        HorizontalDivider(color = NothingHairline, thickness = 1.dp)
-        ToggleRow(
-            title = "Portrait lock (stay put in landscape)",
-            description = "Geometry always comes from the portrait display; landscape never resizes or moves it.",
-            checked = settings.lockPortrait,
-            onCheckedChange = { checked -> onSettingsChange { it.copy(lockPortrait = checked) } },
-        )
-        HorizontalDivider(color = NothingHairline, thickness = 1.dp)
-        ToggleRow(
-            title = "Hide in fullscreen",
-            description = "Stored now; enforcement lands with window tracking.",
-            checked = settings.hideInFullscreen,
-            onCheckedChange = { checked -> onSettingsChange { it.copy(hideInFullscreen = checked) } },
-        )
     }
 }
 
