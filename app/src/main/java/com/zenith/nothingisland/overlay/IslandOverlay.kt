@@ -33,10 +33,10 @@ import kotlin.math.roundToInt
 /**
  * Owns the accessibility overlay window and is the control surface for the feature modules.
  *
- * Geometry is derived from the **portrait** display width whenever [IslandSettings.lockPortrait]
- * is set: rotating to landscape yields the same natural width, so the pill keeps exactly the same
- * size and anchor instead of jumping/resizing. The view is never rotated and the display cutout is
- * never used as an anchor (the only valid anchor is portrait top-centre + calibration offsets).
+ * Landscape/fullscreen suppression is enforced before any window is attached. When landscape
+ * hiding is off, [IslandSettings.lockPortrait] keeps the portrait geometry instead of re-anchoring.
+ * The view is never rotated and the display cutout is never used as an anchor (the only valid
+ * anchor is portrait top-centre + calibration offsets).
  *
  * All calls must happen on the main thread, which matches the AccessibilityService and
  * WindowManager contracts, so no synchronisation is needed.
@@ -75,6 +75,15 @@ class IslandOverlay(private val serviceContext: Context) {
     private var settings = IslandSettings().coerced()
     private var event: IslandEvent? = null
     private var accessibilityRevision = -1
+    private var suppression = IslandSuppression.NONE
+    private var statusBarVisible: Boolean? = null
+    private val visibilityMonitor = IslandVisibilityMonitor(serviceContext) { visible ->
+        statusBarVisible = visible
+        updateSuppression()
+    }
+
+    /** Lets the service close a focusable reply window before the island is suppressed. */
+    var onSuppressed: (() -> Unit)? = null
     /** Millisecond timestamp when the island first became idle (no content). */
     private var idleStartMs = 0L
     private val idleHandler = Handler(Looper.getMainLooper())
@@ -97,7 +106,7 @@ class IslandOverlay(private val serviceContext: Context) {
         override fun onDisplayAdded(displayId: Int) = Unit
         override fun onDisplayRemoved(displayId: Int) = Unit
         override fun onDisplayChanged(displayId: Int) {
-            if (displayId == Display.DEFAULT_DISPLAY) apply()
+            if (displayId == Display.DEFAULT_DISPLAY) refresh()
         }
     }
 
@@ -108,6 +117,7 @@ class IslandOverlay(private val serviceContext: Context) {
         // AOD is a display state, not a broadcast the accessibility service reliably sees: listen
         // to the panel so the hairline outline appears the moment the screen dozes.
         displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
+        visibilityMonitor.start()
     }
 
     /** True when the panel is in always-on/doze (Nothing OS renders the AOD in this state). */
@@ -133,12 +143,13 @@ class IslandOverlay(private val serviceContext: Context) {
     /** Applies calibration changes without changing what is displayed. */
     fun updateSettings(newSettings: IslandSettings) {
         settings = newSettings.coerced()
-        apply()
+        updateSuppression()
     }
 
     /** Renders the holder's current event (null = idle pill). */
     fun render(newEvent: IslandEvent?) {
         event = newEvent
+        if (suppression != IslandSuppression.NONE) return
         // The window already spans both states, so a morph starts without resizing the surface.
         pill.render(newEvent)
         apply()
@@ -147,6 +158,7 @@ class IslandOverlay(private val serviceContext: Context) {
     fun hide() {
         if (layoutParams == null) return
         cancelIdleContraction()
+        pill.onHidden()
         layoutParams = null
         removeTouchWindow()
         runCatching { windowManager.removeViewImmediate(pill) }
@@ -158,25 +170,57 @@ class IslandOverlay(private val serviceContext: Context) {
         cancelIdleContraction()
         idleStartMs = 0L
         pill.onMorphSettled = null
+        visibilityMonitor.stop()
+        onSuppressed = null
         hide()
         runCatching { displayManager.unregisterDisplayListener(displayListener) }
             .onFailure { Log.w(TAG, "Display listener was already detached", it) }
     }
 
-    /** Recomputes geometry, e.g. after a rotation or fold. Identical params in portrait lock. */
+    /** Recomputes visibility and geometry after a rotation, fold, or configuration change. */
     fun refresh() {
-        if (isShowing) apply()
+        visibilityMonitor.refresh()
+        updateSuppression()
+    }
+
+    private fun updateSuppression() {
+        val bounds = windowManager.maximumWindowMetrics.bounds
+        val landscape = bounds.width() > bounds.height() ||
+            resources().configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val next = IslandVisibilityPolicy.resolve(
+            hideInLandscape = settings.hideInLandscape,
+            hideInFullscreen = settings.hideInFullscreen,
+            landscape = landscape,
+            statusBarVisible = statusBarVisible,
+        )
+        if (next == suppression) {
+            if (next == IslandSuppression.NONE) apply()
+            return
+        }
+        suppression = next
+        if (next != IslandSuppression.NONE) {
+            onSuppressed?.invoke()
+            hide()
+        } else {
+            apply()
+        }
     }
 
     private fun apply() {
+        if (suppression != IslandSuppression.NONE) {
+            hide()
+            return
+        }
         val compact = footprint(expanded = false)
         val expandedFrame = footprint(expanded = true)
         val dormant = dormantFootprint()
-        val satellite = satelliteFootprint(compact)
+        val satellitePlacement = satelliteFootprint(compact)
+        val satellite = satellitePlacement.reserve
         // One fixed window for both states, added once: expanding and retracting only ever move
         // rectangles inside it, so no frame is ever composited into a differently sized surface.
         val window = envelopeOf(compact, expandedFrame, dormant, satellite)
         val existing = layoutParams
+        val wasAttached = existing != null
         if (existing == null) {
             val params = buildLayoutParams(window, touchable = false)
             runCatching { windowManager.addView(pill, params) }
@@ -202,13 +246,18 @@ class IslandOverlay(private val serviceContext: Context) {
                 }
         }
 
+        if (!wasAttached && layoutParams != null) {
+            // Suppressed emissions were stored but not rendered. Re-entry snaps to the current
+            // activity instead of replaying stale motion from before the fullscreen app.
+            pill.render(event)
+        }
         // The pill morphs inside the window, so expanding/collapsing never triggers a relayout
         // mid-animation: the two frames are just rectangles inside the current window.
         pill.setFrames(
             compactFrame = rectIn(compact, window),
             expandedFrame = rectIn(expandedFrame, window),
             dormantFrame = rectIn(dormant, window),
-            satelliteFrame = rectIn(satellite, window),
+            satelliteFrame = satellitePlacement.frame?.let { rectIn(it, window) } ?: RectF(),
             compactCornerPx = dp(compact.cornerRadiusDp).toFloat(),
             expandedCornerPx = dp(expandedFrame.cornerRadiusDp).toFloat(),
         )
@@ -243,7 +292,7 @@ class IslandOverlay(private val serviceContext: Context) {
             guideVisible = settings.showHoleGuide && settings.holeEnabled,
         )
 
-        updateTouchWindow(compact, expandedFrame, satellite)
+        updateTouchWindow(compact, expandedFrame, satellitePlacement.frame ?: compact.window())
         if (accessibilityRevision != pill.accessibilityRevision) {
             accessibilityRevision = pill.accessibilityRevision
             if (touchParams != null) touchShield.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
@@ -256,15 +305,26 @@ class IslandOverlay(private val serviceContext: Context) {
      * starting or ending never resizes the surface (a resize would flash a stretched frame); the
      * renderer decides whether anything is actually drawn there.
      */
-    private fun satelliteFootprint(compact: Footprint): Envelope {
-        val size = compact.heightPx
-        val gap = dp(settings.satelliteGapDp.toFloat())
-        val portraitWidth = portraitWidthPx()
-        // Never let it hang off the panel: with a wide / edge-anchored pill the bubble slides left
-        // instead of being clipped by the display edge.
-        val x = (compact.x + compact.widthPx + gap)
-            .coerceAtMost((portraitWidth - size - dp(SATELLITE_MARGIN_DP)).coerceAtLeast(0))
-        return Envelope(widthPx = size, heightPx = size, x = x, y = compact.y)
+    private fun satelliteFootprint(compact: Footprint): SatelliteFootprint {
+        val density = resources().displayMetrics.density
+        val placement = IslandLayout.satellitePlacement(
+            compactLeftDp = compact.x / density,
+            compactWidthDp = compact.widthPx / density,
+            compactHeightDp = compact.heightPx / density,
+            gapDp = settings.satelliteGapDp.toFloat(),
+            sizeDp = settings.satelliteSizeDp.toFloat(),
+            screenWidthDp = portraitWidthPx() / density,
+        )
+        val size = dp(placement.sizeDp)
+        val reserve = Envelope(
+            widthPx = size,
+            heightPx = size,
+            x = dp(placement.leftDp),
+            y = (compact.y + dp(placement.topDp)).coerceAtLeast(0),
+        )
+        // Reserve the resting area even when an edge-anchored wide pill leaves no room, so the
+        // surface does not resize when an activity starts; the renderer simply keeps it empty.
+        return SatelliteFootprint(reserve, if (placement.fits) reserve else null)
     }
 
     /**
@@ -588,6 +648,8 @@ class IslandOverlay(private val serviceContext: Context) {
         val cornerRadiusDp: Float,
     )
 
+    private data class SatelliteFootprint(val reserve: Envelope, val frame: Envelope?)
+
     /** Fixed window rectangle that contains both the compact pill and the expanded view. */
     private data class Envelope(
         val widthPx: Int,
@@ -698,9 +760,6 @@ class IslandOverlay(private val serviceContext: Context) {
 
     private companion object {
         const val TAG = "IslandOverlay"
-
-        /** Detached app-icon bubble: minimum screen-edge margin (the gap is user-configurable). */
-        const val SATELLITE_MARGIN_DP = 2f
 
         /** Slack around both states so the spring overshoot is never clipped by the window. */
         const val ENVELOPE_PAD_DP = 4f

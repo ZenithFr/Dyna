@@ -28,6 +28,26 @@ class IslandSettingsTest {
     }
 
     @Test
+    fun visibilityAndCompactLayoutDefaultsAreIntentionalAndClamped() {
+        val defaults = IslandSettings()
+        assertTrue(defaults.hideInLandscape)
+        assertTrue(defaults.hideInFullscreen)
+        assertEquals(IslandSettings.DEFAULT_COMPACT_ICON_SIZE_DP, defaults.compactIconSizeDp)
+        assertEquals(IslandSettings.DEFAULT_COMPACT_EDGE_PADDING_DP, defaults.compactEdgePaddingDp)
+        assertEquals(IslandSettings.DEFAULT_SATELLITE_SIZE_DP, defaults.satelliteSizeDp)
+        val settings = IslandSettings(
+            compactIconSizeDp = 99,
+            compactEdgePaddingDp = 0,
+            satelliteSizeDp = 99,
+            satelliteIconPaddingDp = -1,
+        ).coerced()
+        assertEquals(IslandSettings.COMPACT_ICON_SIZE_RANGE.last, settings.compactIconSizeDp)
+        assertEquals(IslandSettings.COMPACT_EDGE_PADDING_RANGE.first, settings.compactEdgePaddingDp)
+        assertEquals(IslandSettings.SATELLITE_SIZE_RANGE.last, settings.satelliteSizeDp)
+        assertEquals(IslandSettings.SATELLITE_ICON_PADDING_RANGE.first, settings.satelliteIconPaddingDp)
+    }
+
+    @Test
     fun placementKeepsThePillOnScreen() {
         val settings = IslandSettings(offsetXDp = 24)
         assertEquals(165.5f, settings.pillLeftDp(393f, 110f), 0.01f)

@@ -9,8 +9,8 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
 > ships a full countdown timer, and places itself around
 > the physical camera punch-hole with three calibration modes and two shell shapes (pill / notch).
 > Compact content flanks the lens; expanded cards use Apple-style leading/trailing continuity and
-> a full-width control region **below** the lens. Portrait lock keeps the portrait top-centre
-> anchor in landscape apps and fullscreen video. Tap-to-expand and single-active-source priority
+> a full-width control region **below** the lens. Landscape and immersive fullscreen hide the
+> island by default; portrait lock only governs geometry when landscape hiding is off. Tap-to-expand and single-active-source priority
 > remain the documented Android behaviour; this is not a claim of pixel-identical iPhone parity.
 
 ## What works today
@@ -50,13 +50,14 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   `TIME'S UP` / `00:00` for 4 s before clearing. Notifications and charging still layer above it
   and hand it back when they expire.
 - **Detached app icon**: a persistent live activity — music, timer, maps or downloads — keeps the
-  island compact and moves the owning app's icon into its own shell-height bubble a gap to the
-  right, the way the system island separates an app from its activity. The bubble is part of the
-  island for touches (tapping it does what tapping the shell does), it grows in and retracts with
-  the compact shell, and its surface space is reserved so an activity starting or ending never
-  resizes the window. Notification, charging and battery alerts never split: they keep the single
-  shell. The bubble can be switched off and its gap adjusted in **Expanded card & colours**; its
-  offscreen layer is bounded to the bubble, and TalkBack announces the shared shell action once.
+  island compact and moves the owning app's icon into its own circle a gap to the right. Detach and
+  re-attach are a mitosis-style motion: the daughter circle grows from the trailing shell edge, a
+  Bézier neck thins and pinches off, and the same spring reverses the union on expand/retract. The
+  circle is part of the island for touches, its surface space is reserved so an activity starting or
+  ending never resizes the window, and it is omitted only when an edge-anchored wide pill leaves no
+  room without overlap. Notification, charging and battery alerts never split. Diameter, gap and
+  icon inset live in **Detached app icon**; icon layers are bounded and TalkBack announces the shared
+  shell action once.
 - **Camera hole**: the overlay knows where the physical punch-hole is (defaults: screen centre,
   26 dp down, 8 dp radius). Compact content is split into leading/trailing areas beside it — media
   art left / bars right, notification icon left / title right, timer glyph left / time right,
@@ -87,9 +88,12 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   than uniform: over half of the width is gone before the height moves at all, then the height
   flattens while the rest of the width closes, so the shell slides up into the lens instead of
   shrinking around its own centre.
-- **Portrait lock** (default on): geometry is always computed from the portrait display width,
-  so landscape games/video never resize, rotate or move the island. The app itself is locked to
-  portrait. Turn the switch off for rotation-aware behaviour.
+- **Display behaviour**: **Hide in landscape** and **Hide in fullscreen** default on. Suppression
+  removes the island, touch shield and inline reply (the invisible 1 px inset probe remains), and stops overlay frame work; sources keep
+  running and the current activity snaps back when allowed. Fullscreen is detected from status-bar
+  inset visibility through a 1 px non-touchable probe, not window content. **Portrait lock** only
+  applies when landscape hiding is off: it keeps the portrait size/top-centre anchor instead of
+  re-anchoring to the rotated cutout. The settings app itself remains portrait.
 - **Customization**: every source can be switched off; alert holds, battery threshold, lockscreen
   redaction and call auto-expand are configurable; expanded width/corner/margins/lens clearance/text
   scale are sliders; motion has a 120 Hz morph hint, separate ambient loop rate and speed scale;
@@ -99,10 +103,10 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   48 dp touch targets, wrapping chip rows and whole-row switches; the canvas island exposes its
   rest-state controls to TalkBack as virtual buttons.
 - Calibration sliders persisted with **DataStore Preferences**: horizontal/vertical offset,
-  width, height, corner radius and the portrait-lock switch. Every change updates the overlay
-  live because the service collects the same DataStore `Flow`.
-- "Hide in fullscreen" preference persisted as a stub (no enforcement yet). The service keeps
-  `canRetrieveWindowContent=false`; it does not inspect window content to guess fullscreen state.
+  width, height, corner radius, compact icon size/edge padding, detached-circle diameter/gap/inset
+  and the display-behaviour switches. Every change updates the overlay live because the service
+  collects the same DataStore `Flow`. The service keeps `canRetrieveWindowContent=false`; fullscreen
+  detection reads only its own probe's `WindowInsets` visibility.
 - Adaptive launcher icon: black background, white pill, red dot.
 
 ## Target device
@@ -235,8 +239,14 @@ clamped to safe ranges:
 | Width | 28 … 300 dp (clamped to screen) | 110 dp |
 | Height | 24 … 48 dp | 32 dp |
 | Corner radius | 8 … 24 dp | 16 dp |
-| Portrait lock | on/off | on |
-| Hide in fullscreen | on/off (stub) | on |
+| Hide in landscape | on/off | on |
+| Hide in fullscreen | on/off | on |
+| Portrait lock (when landscape hiding is off) | on/off | on |
+| Compact icon size | 12 … 28 dp | 20 dp |
+| Compact shell edge padding | 4 … 16 dp | 8 dp |
+| Detached circle diameter | 24 … 48 dp | 32 dp |
+| Detached circle gap | 4 … 20 dp | 8 dp |
+| Detached icon inset | 0 … 8 dp | 3 dp |
 | Hole enabled | on/off | on |
 | Hole X (from screen centre) | −80 … +80 dp | 0 dp |
 | Hole Y (from screen top) | 0 … 60 dp | 26 dp |
@@ -297,8 +307,10 @@ adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the 
 #    Switch Island shape to Notch: it hangs from the top edge (Y slider disabled).
 #    adb logcat -s IslandHole   # raw cutout rects from DETECT CUTOUT
 
-# 7. Portrait lock: rotate into a landscape game/video. The pill must keep its size and
-#    top-centre anchor (no jump, no rotation), and must not re-anchor to the cutout.
+# 7. Display behaviour: rotate into landscape or open immersive video/a game. With the defaults
+#    the island, touch window and reply window must disappear; returning to portrait/non-fullscreen
+#    restores the current activity. Turn Hide in landscape off to verify portrait lock instead.
+#    adb shell dumpsys window windows | grep -E 'NothingIsland|NothingIslandTouch|NothingIslandReply' | grep -v Visibility
 
 # 8. Idle contraction: pause the music / let the alert expire so the island has nothing to show.
 #    After the configured delay (1s by default) the shell curls into the camera hole. A new
@@ -321,7 +333,8 @@ app/src/main/java/com/zenith/nothingisland/
 ├── MainActivity.kt                       # Compose host, intents, grant polling
 ├── data/IslandSettings.kt                # settings model + DataStore repository
 ├── data/HoleGeometry.kt                  # hole model, mode placement, island shape paths
-├── overlay/IslandOverlay.kt              # window, hole-aware geometry, portrait lock, a11y nodes
+├── overlay/IslandOverlay.kt              # window, hole-aware geometry, suppression, a11y nodes
+├── overlay/IslandVisibility.kt           # landscape/fullscreen policy + privacy-safe inset probe
 ├── overlay/IslandLayout.kt               # Apple-style compact/expanded layout rules
 ├── overlay/IslandMotion.kt               # frame-rate-independent spring/easing math
 ├── overlay/IslandPillView.kt             # canvas renderer, hole avoidance, gesture targets
@@ -342,13 +355,12 @@ app/src/test/java/com/zenith/nothingisland/ # local layout/motion/state regressi
 
 ## Roadmap
 
-1. **Fullscreen rule** — honour `hideInFullscreen` without broadening window-content access.
-2. **Richer call UI** — missed-call history and video-call artwork beyond CallStyle extras.
-3. **Minimal/detached presentation** — Apple's two-activity minimal layout; the current holder
+1. **Richer call UI** — missed-call history and video-call artwork beyond CallStyle extras.
+2. **Minimal/detached presentation** — Apple's two-activity minimal layout; the current holder
    intentionally publishes one active source using the documented priority order.
-4. **Gesture mode** — optional Apple-style tap-to-open / long-press-to-expand.
-5. **Optional Shizuku module** — only for OS state with no public API; never required for core features.
-6. **Glyph / Nothing integrations** — optional, keep them behind feature flags.
+3. **Gesture mode** — optional Apple-style tap-to-open / long-press-to-expand.
+4. **Optional Shizuku module** — only for OS state with no public API; never required for core features.
+5. **Glyph / Nothing integrations** — optional, keep them behind feature flags.
 
 ## License
 

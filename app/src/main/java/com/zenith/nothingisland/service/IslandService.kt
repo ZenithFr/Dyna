@@ -25,9 +25,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * AccessibilityService that paints the island window. It intentionally does not observe
- * accessibility events or window content: the service is only a permission vehicle for a
- * TYPE_ACCESSIBILITY_OVERLAY window, which needs no root and no SYSTEM_ALERT_WINDOW grant.
+ * AccessibilityService that paints the island window. It does not observe accessibility events
+ * or window content: the service is a permission vehicle for TYPE_ACCESSIBILITY_OVERLAY windows,
+ * which need no root and no SYSTEM_ALERT_WINDOW grant. Fullscreen suppression reads only the
+ * status-bar visibility from the overlay's own WindowInsets, never another app's UI tree.
  *
  * Feature wiring stays thin here: media, notifications and charging own their own modules and
  * publish into [IslandStateHolder]; this class only renders the holder's current event and
@@ -61,7 +62,13 @@ class IslandService : AccessibilityService(), IslandInteraction {
             overlay = runCatching { IslandOverlay(this) }
                 .onFailure { Log.e(TAG, "Unable to create the island window", it) }
                 .getOrNull()
-                ?.also { it.interaction = this }
+                ?.also {
+                    it.interaction = this
+                    it.onSuppressed = {
+                        replyWindow.hide()
+                        replyKey = null
+                    }
+                }
         }
 
         settingsJob?.cancel()
@@ -238,16 +245,16 @@ class IslandService : AccessibilityService(), IslandInteraction {
     // Lifecycle
     // ---------------------------------------------------------------------------------------
 
-    // Fullscreen hiding is still a roadmap item. Retrieving window bounds would require
-    // canRetrieveWindowContent=true, which this service deliberately does not request.
+    // Visibility is driven by DisplayManager/configuration changes and the overlay's own inset
+    // probe. No accessibility event or window-content capability is needed.
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
 
     override fun onInterrupt() = Unit
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        // Portrait lock makes this a no-op geometry-wise: the same params are re-applied, which
-        // also keeps the window attached without a visible jump.
+        // Re-evaluate landscape/fullscreen suppression first; portrait lock only governs the
+        // geometry when landscape hiding is disabled.
         overlay?.refresh()
     }
 

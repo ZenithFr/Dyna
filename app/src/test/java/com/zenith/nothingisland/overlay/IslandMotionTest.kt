@@ -45,6 +45,33 @@ class IslandMotionTest {
     }
 
     @Test
+    fun mitosisNeckPinchesOffBeforeTheIconIsFullyRevealed() {
+        assertEquals(1f, IslandMotion.satelliteNeckShare(0f), 0.001f)
+        assertEquals(0f, IslandMotion.satelliteNeckShare(IslandMotion.SATELLITE_NECK_BREAK), 0.001f)
+        assertEquals(0f, IslandMotion.satelliteIconShare(0f), 0.001f)
+        assertEquals(1f, IslandMotion.satelliteIconShare(1f), 0.001f)
+        assertTrue(IslandMotion.satelliteNeckShare(0.5f) > IslandMotion.satelliteNeckShare(0.7f))
+        assertTrue(IslandMotion.satelliteIconShare(0.5f) < IslandMotion.satelliteIconShare(0.9f))
+    }
+
+    @Test
+    fun satelliteSpringIsRefreshRateIndependentAndReversible() {
+        fun simulate(steps: Int, target: Float, start: Float): Float {
+            val out = FloatArray(2)
+            var position = start
+            var velocity = 0f
+            repeat(steps) {
+                IslandMotion.stepSpring(position, velocity, target, IslandMotion.SATELLITE_OMEGA, IslandMotion.SATELLITE_ZETA, 0.4f / steps, out)
+                position = out[0]
+                velocity = out[1]
+            }
+            return position
+        }
+        assertTrue(abs(simulate(24, 1f, 0f) - simulate(48, 1f, 0f)) < 0.0001f)
+        assertTrue(abs(simulate(24, 0f, 1f) - simulate(48, 0f, 1f)) < 0.0001f)
+    }
+
+    @Test
     fun idleCurlNarrowsBeforeItFlattens() {
         assertTrue(IslandMotion.dormantWidthShare(0.5f) > IslandMotion.dormantHeightShare(0.5f))
         assertEquals(0f, IslandMotion.dormantHeightShare(0.4f), 0.001f)

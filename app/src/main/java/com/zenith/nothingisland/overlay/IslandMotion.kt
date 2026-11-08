@@ -22,6 +22,9 @@ internal object IslandMotion {
     const val DORMANT_ZETA = 0.9f
     const val DORMANT_WIDTH_LEAD = 1.6f
     const val DORMANT_HEIGHT_START = 0.45f
+    const val SATELLITE_OMEGA = 23f
+    const val SATELLITE_ZETA = 0.9f
+    const val SATELLITE_NECK_BREAK = 0.78f
     const val SWAP_DURATION_MS = 160L
     const val REVEAL_DURATION_MS = 220f
 
@@ -70,4 +73,12 @@ internal object IslandMotion {
 
     fun dormantHeightShare(progress: Float): Float =
         smoothStep((progress.coerceIn(0f, 1f) - DORMANT_HEIGHT_START) / (1f - DORMANT_HEIGHT_START))
+
+    /** Mitosis neck thins continuously and pinches off before the circle reaches its resting gap. */
+    fun satelliteNeckShare(progress: Float): Float =
+        1f - smoothStep((progress.coerceIn(0f, 1f) - 0.18f) / (SATELLITE_NECK_BREAK - 0.18f))
+
+    /** The icon appears only after the daughter circle has enough area to contain it. */
+    fun satelliteIconShare(progress: Float): Float =
+        smoothStep((progress.coerceIn(0f, 1f) - 0.42f) / (1f - 0.42f))
 }

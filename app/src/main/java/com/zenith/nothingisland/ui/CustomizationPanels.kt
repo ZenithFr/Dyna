@@ -164,15 +164,7 @@ internal fun ExpandedAppearancePanel(settings: IslandSettings, onSettingsChange:
             CalibrationSlider("Island text scale", settings.islandTextScalePercent, IslandSettings.ISLAND_TEXT_SCALE_RANGE, unit = "%") {
                 onSettingsChange { s -> s.copy(islandTextScalePercent = it) }
             }
-            CalibrationSlider("App-icon bubble gap", settings.satelliteGapDp, IslandSettings.SATELLITE_GAP_RANGE) {
-                onSettingsChange { s -> s.copy(satelliteGapDp = it) }
-            }
         }
-        ToggleRow(
-            "Detached app icon",
-            "Music, timers, maps and downloads put the owning app's icon in its own bubble beside the compact island. Alerts never split.",
-            settings.detachedAppIcon,
-        ) { onSettingsChange { s -> s.copy(detachedAppIcon = it) } }
         AccentColorRow("Timer", settings.timerColorArgb, IslandSettings.DEFAULT_TIMER_COLOR_ARGB) { onSettingsChange { s -> s.copy(timerColorArgb = it) } }
         AccentColorRow("Charging", settings.chargingColorArgb, IslandSettings.DEFAULT_CHARGING_COLOR_ARGB) { onSettingsChange { s -> s.copy(chargingColorArgb = it) } }
         AccentColorRow("Battery low", settings.batteryLowColorArgb, IslandSettings.DEFAULT_BATTERY_LOW_COLOR_ARGB) { onSettingsChange { s -> s.copy(batteryLowColorArgb = it) } }
@@ -230,6 +222,72 @@ private fun AccentColorRow(label: String, argb: Int, defaultArgb: Int, onChange:
                         .border(if (selected) 2.dp else 1.dp, if (selected) NothingWhite else NothingHairline, CircleShape)
                         .padding(6.dp).clip(CircleShape).background(Color(color)),
                 )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun DisplayBehaviorPanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    PanelColumn {
+        ToggleRow(
+            "Hide in landscape",
+            "Remove the island and its touch window whenever the display is wider than it is tall.",
+            settings.hideInLandscape,
+        ) { onSettingsChange { s -> s.copy(hideInLandscape = it) } }
+        ToggleRow(
+            "Hide in fullscreen",
+            "Hide while the status bar is hidden (immersive video/games). Transient system-bar swipes bring it back. Reads only inset visibility, not screen content.",
+            settings.hideInFullscreen,
+        ) { onSettingsChange { s -> s.copy(hideInFullscreen = it) } }
+        ToggleRow(
+            "Portrait lock",
+            "Only used when landscape hiding is off: keep the portrait size and top-centre anchor instead of re-anchoring to the rotated cutout.",
+            settings.lockPortrait,
+        ) { onSettingsChange { s -> s.copy(lockPortrait = it) } }
+    }
+}
+
+@Composable
+internal fun CompactLayoutPanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    PanelColumn {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            CalibrationSlider("Compact icon size", settings.compactIconSizeDp, IslandSettings.COMPACT_ICON_SIZE_RANGE) {
+                onSettingsChange { s -> s.copy(compactIconSizeDp = it) }
+            }
+            CalibrationSlider("Shell edge padding", settings.compactEdgePaddingDp, IslandSettings.COMPACT_EDGE_PADDING_RANGE) {
+                onSettingsChange { s -> s.copy(compactEdgePaddingDp = it) }
+            }
+            Text(
+                "Icons fit inside the safe area at small heights. The lens clearance below still applies, so content never crosses the camera hole.",
+                style = MaterialTheme.typography.bodySmall,
+                color = NothingMuted,
+                modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+            )
+            CalibrationSlider("Lens clearance", settings.sensorClearanceDp, IslandSettings.SENSOR_CLEARANCE_RANGE) {
+                onSettingsChange { s -> s.copy(sensorClearanceDp = it) }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun DetachedIconPanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    PanelColumn {
+        ToggleRow(
+            "Detached app icon",
+            "Music, timers, maps and downloads split the owning app's icon into a circle beside the compact island. Expand/retract uses a mitosis-style detach and rejoin.",
+            settings.detachedAppIcon,
+        ) { onSettingsChange { s -> s.copy(detachedAppIcon = it) } }
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            CalibrationSlider("Circle diameter", settings.satelliteSizeDp, IslandSettings.SATELLITE_SIZE_RANGE) {
+                onSettingsChange { s -> s.copy(satelliteSizeDp = it) }
+            }
+            CalibrationSlider("Circle gap", settings.satelliteGapDp, IslandSettings.SATELLITE_GAP_RANGE) {
+                onSettingsChange { s -> s.copy(satelliteGapDp = it) }
+            }
+            CalibrationSlider("Icon inset", settings.satelliteIconPaddingDp, IslandSettings.SATELLITE_ICON_PADDING_RANGE) {
+                onSettingsChange { s -> s.copy(satelliteIconPaddingDp = it) }
             }
         }
     }
