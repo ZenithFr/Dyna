@@ -1,7 +1,9 @@
 package com.zenith.nothingisland
 
 import android.content.Intent
+import android.graphics.RectF
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
@@ -127,18 +129,30 @@ class MainActivity : ComponentActivity() {
      */
     private fun detectCameraHole() {
         val metrics = getSystemService(WindowManager::class.java)?.currentWindowMetrics
-        val rects = metrics?.windowInsets?.displayCutout?.boundingRects.orEmpty()
+        val cutout = metrics?.windowInsets?.displayCutout
+        val rects = cutout?.boundingRects.orEmpty()
         Log.d(HOLE_TAG, "displayCutout boundingRects=${rects.joinToString { it.toShortString() }}")
 
         val density = resources.displayMetrics.density
         val screenWidthPx = metrics?.bounds?.width() ?: 0
-        // A punch-hole rect is small. Nothing OS reports the whole status-bar exclusion
-        // (86x126 px here), which would place a huge ring off-centre, so reject anything
-        // taller than ~40 dp or wider than ~80 dp and keep the calibrated values instead.
-        val plausible = rects
-            .filter { it.width() > 0 && it.height() > 0 && density > 0f }
+        // Nothing OS reports the whole status-bar exclusion as the cutout rect (86x126 px here),
+        // which is not the lens. The cutout path still describes the real punch hole, so add its
+        // bounds as a candidate too and let the smallest plausible shape win.
+        val pathBounds = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            cutout?.cutoutPath?.takeIf { !it.isEmpty }?.let { path ->
+                RectF().also { path.computeBounds(it, true) }
+            }
+        } else {
+            null
+        }
+        Log.d(HOLE_TAG, "displayCutout pathBounds=${pathBounds?.toShortString()}")
+
+        // A punch-hole is small: reject anything taller than ~40 dp or wider than ~80 dp so a
+        // padded status-bar exclusion can never place a huge ring off-centre.
+        val plausible = (rects.map { RectF(it) } + listOfNotNull(pathBounds))
+            .filter { it.width() > 0f && it.height() > 0f && density > 0f }
             .filter { it.width() / density <= 80f && it.height() / density <= 40f }
-            .minByOrNull { it.width().toLong() * it.height() }
+            .minByOrNull { it.width() * it.height() }
 
         if (plausible == null || density <= 0f || screenWidthPx <= 0) {
             Log.d(HOLE_TAG, "no small cutout rect; keeping current calibration")
