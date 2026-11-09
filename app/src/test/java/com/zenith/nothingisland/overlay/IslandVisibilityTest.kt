@@ -8,6 +8,26 @@ import org.junit.Test
 
 class IslandVisibilityTest {
     @Test
+    fun onlyTheFullscreenHideEdgeIsDebounced() {
+        // App-transition blink: the status bar reports hidden for a few frames during the animation.
+        assertTrue(
+            IslandVisibilityPolicy.shouldDebounceSuppression(IslandSuppression.NONE, IslandSuppression.FULLSCREEN),
+        )
+        // Real power/rotation states must hide immediately.
+        assertFalse(
+            IslandVisibilityPolicy.shouldDebounceSuppression(IslandSuppression.NONE, IslandSuppression.SCREEN_OFF),
+        )
+        assertFalse(
+            IslandVisibilityPolicy.shouldDebounceSuppression(IslandSuppression.NONE, IslandSuppression.LANDSCAPE),
+        )
+        // Coming back is never delayed.
+        assertFalse(
+            IslandVisibilityPolicy.shouldDebounceSuppression(IslandSuppression.FULLSCREEN, IslandSuppression.NONE),
+        )
+        assertTrue(IslandVisibilityPolicy.FULLSCREEN_HIDE_DEBOUNCE_MS > 0L)
+    }
+
+    @Test
     fun screenOffSuppressionWinsEvenWhenOtherHidingIsDisabled() {
         assertEquals(
             IslandSuppression.SCREEN_OFF,

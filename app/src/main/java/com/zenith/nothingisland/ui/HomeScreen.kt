@@ -1,6 +1,7 @@
 package com.zenith.nothingisland.ui
 
 import android.graphics.Paint
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -31,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.zenith.nothingisland.data.IslandHoleMode
 import com.zenith.nothingisland.data.IslandHoleSide
 import com.zenith.nothingisland.data.IslandSettings
+import com.zenith.nothingisland.data.IslandSettingsCategory
 import com.zenith.nothingisland.data.IslandShape
 import com.zenith.nothingisland.data.buildIslandPath
 import com.zenith.nothingisland.data.pillLeftDp
@@ -94,131 +97,71 @@ fun HomeScreen(
     onOpenNotificationListenerSettings: () -> Unit,
     onRequestIgnoreBatteryOptimizations: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
+    onRefreshStatus: () -> Unit,
     onSettingsChange: ((IslandSettings) -> IslandSettings) -> Unit,
 ) {
+    // The page is stored by name so the open category survives configuration/process death without
+    // pulling in a navigation library. One back stack level is all this settings tree needs.
+    var pageName by rememberSaveable { mutableStateOf<String?>(null) }
+    val category = pageName?.let { name ->
+        IslandSettingsCategory.values().firstOrNull { it.name == name }
+    }
+    BackHandler(enabled = category != null) { pageName = null }
+
+    val scrollState = rememberScrollState()
+    LaunchedEffect(category) { scrollState.scrollTo(0) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(NothingBlack)
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(horizontal = 24.dp, vertical = 20.dp),
     ) {
-        Header()
-
-        Spacer(Modifier.height(24.dp))
-        ServiceStatusCard(enabled = serviceEnabled, running = islandRunning)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Setup")
-        Spacer(Modifier.height(10.dp))
-        SetupPanel(
-            serviceEnabled = serviceEnabled,
-            notificationListenerEnabled = notificationListenerEnabled,
-            batteryOptimizationIgnored = batteryOptimizationIgnored,
-            overlayGranted = overlayGranted,
-            onOpenAccessibilitySettings = onOpenAccessibilitySettings,
-            onOpenNotificationListenerSettings = onOpenNotificationListenerSettings,
-            onRequestIgnoreBatteryOptimizations = onRequestIgnoreBatteryOptimizations,
-            onOpenOverlaySettings = onOpenOverlaySettings,
-        )
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Timer")
-        Spacer(Modifier.height(10.dp))
-        TimerPanel(
-            timer = timer,
-            selectedMinutes = timerPresetMinutes,
-            onSelectMinutes = onTimerPresetChange,
-            onStart = onTimerStart,
-            onToggle = onTimerToggle,
-            onStop = onTimerStop,
-        )
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Sources")
-        Spacer(Modifier.height(10.dp))
-        SourcesPanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Alerts & privacy")
-        Spacer(Modifier.height(10.dp))
-        AlertsPrivacyPanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("App integrations")
-        Spacer(Modifier.height(10.dp))
-        IntegrationsPanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Motion & performance")
-        Spacer(Modifier.height(10.dp))
-        MotionPerformancePanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Display behaviour")
-        Spacer(Modifier.height(10.dp))
-        DisplayBehaviorPanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Compact layout")
-        Spacer(Modifier.height(10.dp))
-        CompactLayoutPanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Detached app icon")
-        Spacer(Modifier.height(10.dp))
-        DetachedIconPanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Expanded card & colours")
-        Spacer(Modifier.height(10.dp))
-        ExpandedAppearancePanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Camera hole")
-        Spacer(Modifier.height(10.dp))
-        CameraHolePanel(
-            settings = settings,
-            onSettingsChange = onSettingsChange,
-            onDetectHole = onDetectHole,
-        )
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Calibration")
-        Spacer(Modifier.height(10.dp))
-        CalibrationPanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Island shape & stroke")
-        Spacer(Modifier.height(10.dp))
-        StrokePanel(settings = settings, onSettingsChange = onSettingsChange)
-
-        Spacer(Modifier.height(40.dp))
-        Text(
-            text = "v0.4.0  ·  MIT  ·  runs entirely on device",
-            style = MaterialTheme.typography.labelSmall,
-            color = NothingMuted,
-        )
-        Spacer(Modifier.height(36.dp))
-        SectionLabel("Reset")
-        Spacer(Modifier.height(10.dp))
-        OutlinedButton(
-            onClick = { onSettingsChange { IslandSettings() } },
-            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp),
-            shape = CircleShape,
-            border = BorderStroke(1.dp, NothingHairline),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = NothingWhite),
-        ) {
-            Text("RESTORE ISLAND DEFAULTS", style = MaterialTheme.typography.labelMedium)
+        if (category == null) {
+            SettingsHub(
+                serviceEnabled = serviceEnabled,
+                islandRunning = islandRunning,
+                notificationListenerEnabled = notificationListenerEnabled,
+                timer = timer,
+                timerPresetMinutes = timerPresetMinutes,
+                onTimerPresetChange = onTimerPresetChange,
+                onTimerStart = onTimerStart,
+                onTimerToggle = onTimerToggle,
+                onTimerStop = onTimerStop,
+                onOpenPage = { pageName = it.name },
+            )
+        } else {
+            SettingsPage(
+                category = category,
+                settings = settings,
+                serviceEnabled = serviceEnabled,
+                islandRunning = islandRunning,
+                notificationListenerEnabled = notificationListenerEnabled,
+                batteryOptimizationIgnored = batteryOptimizationIgnored,
+                overlayGranted = overlayGranted,
+                timer = timer,
+                timerPresetMinutes = timerPresetMinutes,
+                onTimerPresetChange = onTimerPresetChange,
+                onTimerStart = onTimerStart,
+                onTimerToggle = onTimerToggle,
+                onTimerStop = onTimerStop,
+                onDetectHole = onDetectHole,
+                onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                onOpenNotificationListenerSettings = onOpenNotificationListenerSettings,
+                onRequestIgnoreBatteryOptimizations = onRequestIgnoreBatteryOptimizations,
+                onOpenOverlaySettings = onOpenOverlaySettings,
+                onRefreshStatus = onRefreshStatus,
+                onSettingsChange = onSettingsChange,
+                onBack = { pageName = null },
+            )
         }
-
-        Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
-private fun Header() {
+internal fun Header() {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
@@ -248,7 +191,7 @@ private fun Header() {
 }
 
 @Composable
-private fun ServiceStatusCard(enabled: Boolean, running: Boolean) {
+internal fun ServiceStatusCard(enabled: Boolean, running: Boolean) {
     val shape = RoundedCornerShape(28.dp)
     Row(
         modifier = Modifier
@@ -291,7 +234,7 @@ private fun ServiceStatusCard(enabled: Boolean, running: Boolean) {
 }
 
 @Composable
-private fun SetupPanel(
+internal fun SetupPanel(
     serviceEnabled: Boolean,
     notificationListenerEnabled: Boolean,
     batteryOptimizationIgnored: Boolean,
@@ -365,7 +308,7 @@ private val TimerPresetMinutes = listOf(1, 5, 10, 25)
  * preset selection lives in the activity.
  */
 @Composable
-private fun TimerPanel(
+internal fun TimerPanel(
     timer: IslandContent.Timer?,
     selectedMinutes: Int,
     onSelectMinutes: (Int) -> Unit,
@@ -524,7 +467,7 @@ private fun TimerPresetChip(minutes: Int, selected: Boolean, onClick: () -> Unit
  */
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
-private fun CameraHolePanel(
+internal fun CameraHolePanel(
     settings: IslandSettings,
     onSettingsChange: ((IslandSettings) -> IslandSettings) -> Unit,
     onDetectHole: () -> Unit,
@@ -870,7 +813,7 @@ private fun HolePreview(
 }
 
 @Composable
-private fun CalibrationPanel(
+internal fun CalibrationPanel(
     settings: IslandSettings,
     onSettingsChange: ((IslandSettings) -> IslandSettings) -> Unit,
 ) {
@@ -957,7 +900,7 @@ private fun CalibrationPanel(
 }
 
 @Composable
-private fun StrokePanel(
+internal fun StrokePanel(
     settings: IslandSettings,
     onSettingsChange: ((IslandSettings) -> IslandSettings) -> Unit,
 ) {

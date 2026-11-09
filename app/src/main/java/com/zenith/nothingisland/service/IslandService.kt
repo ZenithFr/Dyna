@@ -118,6 +118,14 @@ class IslandService : AccessibilityService(), IslandInteraction {
         syncPowerObservers()
     }
 
+    /**
+     * Shows the empty shell briefly while the user edits settings, so calibration sliders have a
+     * live target even when the island had already retired into the lens.
+     */
+    fun previewIsland() {
+        overlay?.previewIsland()
+    }
+
     /** Called by the notification listener when notification access becomes available. */
     fun refreshMedia() {
         if (overlay?.isScreenActive == false) return

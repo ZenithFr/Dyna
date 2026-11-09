@@ -15,8 +15,8 @@ android {
         applicationId = "com.zenith.nothingisland"
         minSdk = 31
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
     }
 
     buildTypes {
@@ -36,6 +36,8 @@ android {
 
     buildFeatures {
         compose = true
+        // The About page reads VERSION_NAME/DEBUG from here instead of duplicating strings.
+        buildConfig = true
     }
 
     packaging {

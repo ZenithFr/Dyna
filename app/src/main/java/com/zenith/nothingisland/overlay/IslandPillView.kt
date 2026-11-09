@@ -5,6 +5,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -15,10 +17,13 @@ import android.os.SystemClock
 import android.text.TextPaint
 import android.text.TextUtils
 import android.util.TypedValue
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import com.zenith.nothingisland.data.IslandLongPressAction
 import com.zenith.nothingisland.data.IslandSettings
+import com.zenith.nothingisland.data.IslandTapAction
 import com.zenith.nothingisland.data.IslandShape
 import com.zenith.nothingisland.data.buildIslandPath
 import com.zenith.nothingisland.service.IslandContent
@@ -186,6 +191,13 @@ internal class IslandPillView(context: Context) : View(context) {
     /** If a morph somehow never settles, this forces it so the window can never stay oversized. */
     private val settleWatchdog = Runnable { forceSettle() }
 
+    /**
+     * Single removable "morph settled" notification. Anonymous post {} lambdas could not be
+     * cancelled, so a queued callback from a finished morph used to run after the island was
+     * detached and re-attach an empty shell.
+     */
+    private val notifyMorphSettled = Runnable { onMorphSettled?.invoke() }
+
     /** Previous activity, crossfaded out when the island switches what it is showing. */
     private var previousContent: IslandContent? = null
     private var swapStartMs = 0L
@@ -218,6 +230,24 @@ internal class IslandPillView(context: Context) : View(context) {
     private var animating = false
 
     private var pressed: Target? = null
+    private var longPressFired = false
+    private val longPressRunnable = Runnable {
+        val target = pressed ?: return@Runnable
+        if (target.kind != TargetKind.Body) return@Runnable
+        longPressFired = true
+        pressed = null
+        activePointerId = -1
+        haptic()
+        val callback = listener
+        if (callback != null) {
+            when (customization.longPressAction) {
+                IslandLongPressAction.OPEN_APP -> callback.onOpenContent()
+                IslandLongPressAction.EXPAND -> callback.onBodyTap()
+                IslandLongPressAction.NONE -> Unit
+            }
+        }
+        invalidate()
+    }
     private var activePointerId = -1
     private var downX = 0f
     private var downY = 0f
@@ -296,7 +326,7 @@ internal class IslandPillView(context: Context) : View(context) {
             dormantSettling = false
             updateSatelliteTarget()
             invalidate()
-            post { onMorphSettled?.invoke() }
+            postMorphSettled()
             return
         }
         updateSatelliteTarget()
@@ -314,6 +344,17 @@ internal class IslandPillView(context: Context) : View(context) {
         if (customization == next) return
         customization = next
         textScalePercent = customization.islandTextScalePercent
+        applyPalette()
+        motionAllowed = customization.motionEnabled && ValueAnimator.areAnimatorsEnabled()
+        if (!motionAllowed) {
+            // Snapping is also the cheapest path: no springs, no reveal, no crossfade frames.
+            revealAnimating = false
+            swapAnimating = false
+            previousContent = null
+            satelliteSwapAnimating = false
+            previousSatelliteDrawable = null
+            forceSettle()
+        }
         updateSatelliteTarget()
         refreshAmbientLoops()
         invalidate()
@@ -335,6 +376,7 @@ internal class IslandPillView(context: Context) : View(context) {
     /** Stops every frame source while the window is suppressed; re-entry snaps to live content. */
     fun onHidden() {
         removeCallbacks(settleWatchdog)
+        removeCallbacks(notifyMorphSettled)
         cancelTouch()
         framesReady = false
         springActive = false
@@ -387,7 +429,7 @@ internal class IslandPillView(context: Context) : View(context) {
             animating || revealAnimating || progressAnimating || satelliteSwapAnimating,
             ambientOnly = animating || progressAnimating,
         )
-        post { onMorphSettled?.invoke() }
+        postMorphSettled()
     }
 
     /** Bottom edge of the drawn shell, for anchoring the inline reply window. */
@@ -431,7 +473,7 @@ internal class IslandPillView(context: Context) : View(context) {
     fun render(event: IslandEvent?) {
         val newContent = event?.content
         val newExpanded = event?.expanded == true
-        motionAllowed = ValueAnimator.areAnimatorsEnabled()
+        motionAllowed = customization.motionEnabled && ValueAnimator.areAnimatorsEnabled()
 
         // A new notification arrives: reveal its text fluidly (per character, short stagger).
         val notification = newContent as? IslandContent.Notification
@@ -471,7 +513,7 @@ internal class IslandPillView(context: Context) : View(context) {
         refreshAmbientLoops()
         // Keep the outgoing icon while the daughter circle re-absorbs into the shell. A new
         // persistent activity replaces it; alerts/battery confirmations only retract it.
-        val nextSatelliteIcon = if (customization.detachedAppIcon) satelliteIcon(newContent) else null
+        val nextSatelliteIcon = satelliteIcon(newContent)
         if (nextSatelliteIcon != null && nextSatelliteIcon !== satelliteDrawable) {
             previousSatelliteDrawable = satelliteDrawable
             satelliteDrawable = nextSatelliteIcon
@@ -506,6 +548,25 @@ internal class IslandPillView(context: Context) : View(context) {
             postDelayed(settleWatchdog, MORPH_WATCHDOG_MS)
         }
         invalidate()
+    }
+
+    /**
+     * Shell and text palette. Every colour the user can change is applied here once per settings
+     * emission, never per frame; per-source accents are still assigned by the drawing helpers.
+     */
+    private fun applyPalette() {
+        val alpha = (255f * customization.shellOpacityPercent / 100f).toInt().coerceIn(0, 255)
+        shellPaint.color = (alpha shl 24) or (customization.shellColorArgb and 0x00FFFFFF)
+        val primary = customization.textColorArgb
+        val secondary = customization.secondaryTextColorArgb
+        titlePaint.color = primary
+        actionPaint.color = primary
+        whitePaint.color = primary
+        progressPaint.color = primary
+        chargingPaint.color = primary
+        expandedTimePaint.color = primary
+        subtitlePaint.color = secondary
+        mutedPaint.color = secondary
     }
 
     /** Decorative loops are opt-in, visible-only, and never run while curled behind the lens. */
@@ -738,7 +799,10 @@ internal class IslandPillView(context: Context) : View(context) {
 
             is IslandContent.Call ->
                 if (expandedVariant) drawCallExpanded(canvas, current)
-                else drawCompactIconText(canvas, current.icon, current.caller, areas, heightPx, Color.WHITE)
+                else drawCompactIconText(
+                    canvas, current.icon, current.caller, areas, heightPx,
+                    customization.textColorArgb, iconDetached = shellIconDetached(current),
+                )
 
             is IslandContent.Download ->
                 if (expandedVariant) drawDownloadExpanded(canvas, current)
@@ -746,11 +810,15 @@ internal class IslandPillView(context: Context) : View(context) {
                     canvas, current.icon,
                     if (current.indeterminate) "…" else "${current.percent}%",
                     areas, heightPx, customization.downloadColorArgb,
+                    iconDetached = shellIconDetached(current),
                 )
 
             is IslandContent.Navigation ->
                 if (expandedVariant) drawNavigationExpanded(canvas, current)
-                else drawCompactIconText(canvas, current.icon, current.instruction, areas, heightPx, Color.WHITE)
+                else drawCompactIconText(
+                    canvas, current.icon, current.instruction, areas, heightPx,
+                    customization.textColorArgb, iconDetached = shellIconDetached(current),
+                )
 
             is IslandContent.Timer ->
                 if (expandedVariant) {
@@ -910,7 +978,7 @@ internal class IslandPillView(context: Context) : View(context) {
     }
 
     private fun updateSatelliteTarget() {
-        val eligible = customization.detachedAppIcon && !expanded && dormantTarget == 0f &&
+        val eligible = !expanded && dormantTarget == 0f &&
             !satelliteBounds.isEmpty && satelliteIcon(content) != null
         val target = if (eligible) 1f else 0f
         satelliteShown = eligible
@@ -944,14 +1012,49 @@ internal class IslandPillView(context: Context) : View(context) {
         satelliteShown = false
     }
 
-    /** Persistent live activities only; transient alerts and battery confirmations never split. */
-    private fun satelliteIcon(value: IslandContent?): Drawable? = when (value) {
-        is IslandContent.Media -> value.appIcon
-        is IslandContent.Timer -> timerAppIcon()
-        is IslandContent.Navigation -> value.icon
-        is IslandContent.Download -> value.icon
-        else -> null
+    /** Compact-row glyph class; see [IslandIconPlacement] for the placement rules. */
+    private fun iconKind(value: IslandContent?): IslandIconKind = when (value) {
+        is IslandContent.Notification, is IslandContent.Call -> IslandIconKind.ALERT
+        is IslandContent.Download, is IslandContent.Navigation -> IslandIconKind.ACTIVITY_ICON
+        is IslandContent.Media, is IslandContent.Timer -> IslandIconKind.ACTIVITY_ART
+        else -> IslandIconKind.NONE
     }
+
+    private fun bubbleTakesIcon(value: IslandContent?): Boolean = IslandIconPlacement.bubbleShowsAppIcon(
+        kind = iconKind(value),
+        detachedAppIcon = customization.detachedAppIcon,
+        alertIconInBubble = customization.alertIconInBubble,
+    )
+
+    /**
+     * Which icon (if any) rides in the detached bubble.
+     *
+     * Persistent activities (music, timer, maps, downloads) use [IslandSettings.detachedAppIcon].
+     * Notification/call alerts use [IslandSettings.alertIconInBubble]: the app icon leaves the shell
+     * so the compact pill shows the message text, and because the alert is transient the bubble
+     * retracts with the same mitosis spring the moment its hold expires and the holder drops it.
+     */
+    private fun satelliteIcon(value: IslandContent?): Drawable? {
+        if (!bubbleTakesIcon(value)) return null
+        return when (value) {
+            is IslandContent.Media -> value.appIcon
+            is IslandContent.Timer -> timerAppIcon()
+            is IslandContent.Navigation -> value.icon
+            is IslandContent.Download -> value.icon
+            is IslandContent.Notification -> value.icon
+            is IslandContent.Call -> value.icon
+            else -> null
+        }
+    }
+
+    /**
+     * True while this row's app icon lives in the bubble, so the shell draws text only. The bubble
+     * target (not its animated progress) is authoritative: the icon must not flash back into the
+     * shell for the few frames the bubble spends retracting.
+     */
+    private fun shellIconDetached(value: IslandContent?): Boolean =
+        satelliteTarget > 0f && bubbleTakesIcon(value) &&
+            !IslandIconPlacement.shellKeepsIcon(iconKind(value), bubbleVisible = true)
 
     /** The island's own launcher icon, loaded once. */
     private fun timerAppIcon(): Drawable? {
@@ -1060,8 +1163,14 @@ internal class IslandPillView(context: Context) : View(context) {
                 ambientOnly = animating || progressAnimating,
             )
             // Let the owner re-place the touch window now that the shell is at rest.
-            post { onMorphSettled?.invoke() }
+            postMorphSettled()
         }
+    }
+
+    /** Coalesced so only the last settle of a frame notifies the owner, and hide() can cancel it. */
+    private fun postMorphSettled() {
+        removeCallbacks(notifyMorphSettled)
+        post(notifyMorphSettled)
     }
 
     private fun stepSpring(
@@ -1345,9 +1454,19 @@ internal class IslandPillView(context: Context) : View(context) {
         areas: Areas,
         heightPx: Float,
     ) {
+        val detached = shellIconDetached(notification)
+        if (detached && !customization.notificationShowTitle) return
         if (areas.split) {
             val left = areas.left!!
             val right = areas.right!!
+            if (detached) {
+                // The icon is in the bubble: the widest lens-safe region carries the text alone.
+                val area = areas.widest
+                canvas.inArea(area) {
+                    drawCompactNotificationTitle(canvas, notification.title, area.left, area.right, heightPx, centered = true)
+                }
+                return
+            }
             val fitted = compactGlyphSize(left, customization.compactIconSizeDp.toFloat())
             val iconLeft = left.centerX() - fitted / 2f
             canvas.inArea(left) {
@@ -1359,6 +1478,10 @@ internal class IslandPillView(context: Context) : View(context) {
         } else {
             val area = areas.single
             canvas.inArea(area) {
+                if (detached) {
+                    drawCompactNotificationTitle(canvas, notification.title, area.left, area.right, heightPx, centered = true)
+                    return@inArea
+                }
                 val fitted = compactGlyphSize(area, customization.compactIconSizeDp.toFloat())
                 val iconLeft = area.left
                 drawIcon(canvas, notification.icon, RectF(iconLeft, (heightPx - fitted) / 2f, iconLeft + fitted, (heightPx + fitted) / 2f))
@@ -1373,13 +1496,20 @@ internal class IslandPillView(context: Context) : View(context) {
         left: Float,
         right: Float,
         heightPx: Float,
+        centered: Boolean = false,
     ) {
         titlePaint.textSize = sp(11.5f)
+        titlePaint.color = customization.textColorArgb
         if (right <= left) return
         val available = right - left
         val line = TextUtils.ellipsize(title, titlePaint, available, TextUtils.TruncateAt.END)
         val baseline = heightPx / 2f - (titlePaint.descent() + titlePaint.ascent()) / 2f
-        drawFluidText(canvas, line, left, baseline, titlePaint)
+        val x = if (centered) {
+            left + ((available - titlePaint.measureText(line, 0, line.length)) / 2f).coerceAtLeast(0f)
+        } else {
+            left
+        }
+        drawFluidText(canvas, line, x, baseline, titlePaint)
     }
 
     private fun drawNotificationExpanded(canvas: Canvas, notification: IslandContent.Notification) {
@@ -1629,7 +1759,24 @@ internal class IslandPillView(context: Context) : View(context) {
         areas: Areas,
         heightPx: Float,
         color: Int,
+        iconDetached: Boolean = false,
     ) {
+        if (iconDetached) {
+            // The app icon is in the detached bubble; the shell keeps only the status text.
+            val area = areas.widest
+            titlePaint.textSize = sp(11.5f)
+            titlePaint.color = color
+            canvas.inArea(area) {
+                if (area.width() <= 0f) return@inArea
+                val line = TextUtils.ellipsize(text, titlePaint, area.width(), TextUtils.TruncateAt.END)
+                val baseline = heightPx / 2f - (titlePaint.descent() + titlePaint.ascent()) / 2f
+                val left = area.left +
+                    ((area.width() - titlePaint.measureText(line, 0, line.length)) / 2f).coerceAtLeast(0f)
+                canvas.drawText(line, 0, line.length, left, baseline, titlePaint)
+            }
+            titlePaint.color = customization.textColorArgb
+            return
+        }
         val iconSize = dp(
             IslandLayout.fitIconSizeDp(customization.compactIconSizeDp.toFloat(), areas.widest.width() / density, areas.widest.height() / density),
         )
@@ -1662,7 +1809,7 @@ internal class IslandPillView(context: Context) : View(context) {
                 canvas.drawText(line, 0, line.length, l + iconSize + dp(6f), baseline, titlePaint)
             }
         }
-        titlePaint.color = Color.WHITE
+        titlePaint.color = customization.textColorArgb
     }
 
     private fun drawBatteryLow(canvas: Canvas, content: IslandContent.BatteryLow, areas: Areas, heightPx: Float) {
@@ -1970,12 +2117,18 @@ internal class IslandPillView(context: Context) : View(context) {
         canvas.restore()
     }
 
+    private val monochromeFilter by lazy {
+        ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) })
+    }
+
     private fun drawIcon(canvas: Canvas, drawable: Drawable?, rect: RectF) {
         if (drawable == null) {
             canvas.drawRoundRect(rect, rect.width() * 0.25f, rect.width() * 0.25f, buttonPaint)
             return
         }
         runCatching {
+            // Nothing-style monochrome icons are optional; the filter object is created once.
+            drawable.colorFilter = if (customization.monochromeIcons) monochromeFilter else null
             drawable.setBounds(
                 rect.left.toInt(),
                 rect.top.toInt(),
@@ -1996,9 +2149,14 @@ internal class IslandPillView(context: Context) : View(context) {
                 if (isMorphing()) return false
                 val target = targetAt(event.x, event.y) ?: return false
                 pressed = target
+                longPressFired = false
                 activePointerId = event.getPointerId(0)
                 downX = event.x
                 downY = event.y
+                if (target.kind == TargetKind.Body && customization.longPressAction != IslandLongPressAction.NONE) {
+                    removeCallbacks(longPressRunnable)
+                    postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout().toLong())
+                }
                 invalidate()
                 return true
             }
@@ -2017,8 +2175,9 @@ internal class IslandPillView(context: Context) : View(context) {
             MotionEvent.ACTION_UP -> {
                 val index = event.findPointerIndex(activePointerId)
                 val down = pressed
+                val consumedByLongPress = longPressFired
                 cancelTouch()
-                if (index >= 0 && down != null && !isMorphing()) {
+                if (!consumedByLongPress && index >= 0 && down != null && !isMorphing()) {
                     val up = targetAt(event.getX(index), event.getY(index))
                     if (up != null && down.kind == up.kind && down.index == up.index && down.rect.contains(event.getX(index), event.getY(index))) {
                         dispatch(up)
@@ -2037,13 +2196,22 @@ internal class IslandPillView(context: Context) : View(context) {
     }
 
     private fun cancelTouch() {
+        removeCallbacks(longPressRunnable)
         pressed = null
         activePointerId = -1
+        longPressFired = false
         invalidate()
+    }
+
+    /** Optional confirmation tick; the system's haptic setting still wins. */
+    private fun haptic() {
+        if (!customization.hapticsEnabled) return
+        runCatching { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) }
     }
 
     override fun onDetachedFromWindow() {
         removeCallbacks(settleWatchdog)
+        removeCallbacks(notifyMorphSettled)
         cancelTouch()
         requestMotionRate(false)
         super.onDetachedFromWindow()
@@ -2113,8 +2281,14 @@ internal class IslandPillView(context: Context) : View(context) {
 
     private fun dispatch(target: Target) {
         val callback = listener ?: return
+        if (target.kind == TargetKind.Body && customization.tapAction == IslandTapAction.NONE) return
+        haptic()
         when (target.kind) {
-            TargetKind.Body -> callback.onBodyTap()
+            TargetKind.Body -> when (customization.tapAction) {
+                IslandTapAction.EXPAND -> callback.onBodyTap()
+                IslandTapAction.OPEN_APP -> callback.onOpenContent()
+                IslandTapAction.NONE -> Unit
+            }
             TargetKind.Previous -> callback.onTransport(TransportCommand.Previous)
             TargetKind.PlayPause -> callback.onTransport(TransportCommand.PlayPause)
             TargetKind.Next -> callback.onTransport(TransportCommand.Next)

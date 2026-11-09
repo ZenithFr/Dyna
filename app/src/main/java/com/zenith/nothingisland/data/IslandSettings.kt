@@ -47,6 +47,19 @@ data class IslandSettings(
     val highQualityMotion: Boolean = DEFAULT_HIGH_QUALITY_MOTION,
     val idleContractDelaySec: Int = DEFAULT_IDLE_CONTRACT_DELAY_SEC,
 
+    // Shell + text appearance. Opacity is separate from the colour so a hex entry stays RGB.
+    val shellColorArgb: Int = DEFAULT_SHELL_COLOR_ARGB,
+    val shellOpacityPercent: Int = DEFAULT_SHELL_OPACITY_PERCENT,
+    val textColorArgb: Int = DEFAULT_TEXT_COLOR_ARGB,
+    val secondaryTextColorArgb: Int = DEFAULT_SECONDARY_TEXT_COLOR_ARGB,
+    val monochromeIcons: Boolean = DEFAULT_MONOCHROME_ICONS,
+
+    // Interaction. The default keeps the documented tap-to-expand behaviour.
+    val idleBehaviour: IslandIdleBehaviour = DEFAULT_IDLE_BEHAVIOUR,
+    val tapAction: IslandTapAction = DEFAULT_TAP_ACTION,
+    val longPressAction: IslandLongPressAction = DEFAULT_LONG_PRESS_ACTION,
+    val hapticsEnabled: Boolean = DEFAULT_HAPTICS_ENABLED,
+
     // Source switches. Timer is user-owned and always available once started.
     val mediaEnabled: Boolean = true,
     val notificationsEnabled: Boolean = true,
@@ -64,6 +77,9 @@ data class IslandSettings(
     val batteryLowThresholdPercent: Int = DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT,
     val redactOnLockscreen: Boolean = true,
     val autoExpandCalls: Boolean = true,
+    /** Alert app icons ride in the detached bubble; the shell keeps the text. */
+    val alertIconInBubble: Boolean = DEFAULT_ALERT_ICON_IN_BUBBLE,
+    val notificationShowTitle: Boolean = DEFAULT_NOTIFICATION_SHOW_TITLE,
 
     // Expanded geometry / typography.
     val expandedMaxWidthDp: Int = DEFAULT_EXPANDED_MAX_WIDTH_DP,
@@ -81,6 +97,7 @@ data class IslandSettings(
 
     // Motion / performance. Morphs use the panel's high-rate hint; decorative ambient loops are
     // opt-in so a settled island does not keep the GPU awake.
+    val motionEnabled: Boolean = DEFAULT_MOTION_ENABLED,
     val ambientAnimationsEnabled: Boolean = DEFAULT_AMBIENT_ANIMATIONS_ENABLED,
     val ambientFrameRateHz: Int = DEFAULT_AMBIENT_FRAME_RATE_HZ,
     val motionScalePercent: Int = DEFAULT_MOTION_SCALE_PERCENT,
@@ -97,6 +114,9 @@ data class IslandSettings(
 
     // Second-party integration opt-outs. Empty means every allowed package can surface.
     val disabledPackages: Set<String> = emptySet(),
+
+    // Diagnostics. Off by default: verbose logging must never be the reason the log buffer churns.
+    val verboseLogging: Boolean = DEFAULT_VERBOSE_LOGGING,
 ) {
     fun coerced(): IslandSettings = copy(
         offsetXDp = offsetXDp.coerceIn(OFFSET_X_RANGE),
@@ -126,6 +146,7 @@ data class IslandSettings(
         compactEdgePaddingDp = compactEdgePaddingDp.coerceIn(COMPACT_EDGE_PADDING_RANGE),
         ambientFrameRateHz = ambientFrameRateHz.coerceIn(AMBIENT_FRAME_RATE_RANGE),
         motionScalePercent = motionScalePercent.coerceIn(MOTION_SCALE_RANGE),
+        shellOpacityPercent = shellOpacityPercent.coerceIn(SHELL_OPACITY_RANGE),
         disabledPackages = disabledPackages.toSet(),
     )
 
@@ -156,6 +177,7 @@ data class IslandSettings(
         val COMPACT_EDGE_PADDING_RANGE = 4..16
         val AMBIENT_FRAME_RATE_RANGE = 30..120
         val MOTION_SCALE_RANGE = 50..150
+        val SHELL_OPACITY_RANGE = 40..100
 
         const val DEFAULT_OFFSET_X_DP = 0
         const val DEFAULT_OFFSET_Y_DP = 6
@@ -179,6 +201,19 @@ data class IslandSettings(
         val DEFAULT_ISLAND_SHAPE = IslandShape.PILL
         const val DEFAULT_HIGH_QUALITY_MOTION = true
         const val DEFAULT_IDLE_CONTRACT_DELAY_SEC = 1
+        const val DEFAULT_SHELL_COLOR_ARGB = 0xFF000000.toInt()
+        const val DEFAULT_SHELL_OPACITY_PERCENT = 100
+        const val DEFAULT_TEXT_COLOR_ARGB = 0xFFFFFFFF.toInt()
+        const val DEFAULT_SECONDARY_TEXT_COLOR_ARGB = 0xAAFFFFFF.toInt()
+        const val DEFAULT_MONOCHROME_ICONS = false
+        val DEFAULT_IDLE_BEHAVIOUR = IslandIdleBehaviour.HIDDEN
+        val DEFAULT_TAP_ACTION = IslandTapAction.EXPAND
+        val DEFAULT_LONG_PRESS_ACTION = IslandLongPressAction.OPEN_APP
+        const val DEFAULT_HAPTICS_ENABLED = true
+        const val DEFAULT_ALERT_ICON_IN_BUBBLE = true
+        const val DEFAULT_NOTIFICATION_SHOW_TITLE = true
+        const val DEFAULT_MOTION_ENABLED = true
+        const val DEFAULT_VERBOSE_LOGGING = false
         const val DEFAULT_NOTIFICATION_DURATION_SEC = 4
         const val DEFAULT_CHARGING_DURATION_SEC = 4
         const val DEFAULT_BATTERY_ALERT_DURATION_SEC = 4
@@ -247,6 +282,19 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.islandShape] = next.islandShape.name
             preferences[Keys.highQualityMotion] = next.highQualityMotion
             preferences[Keys.idleContractDelay] = next.idleContractDelaySec
+            preferences[Keys.shellColor] = next.shellColorArgb
+            preferences[Keys.shellOpacity] = next.shellOpacityPercent
+            preferences[Keys.textColor] = next.textColorArgb
+            preferences[Keys.secondaryTextColor] = next.secondaryTextColorArgb
+            preferences[Keys.monochromeIcons] = next.monochromeIcons
+            preferences[Keys.idleBehaviour] = next.idleBehaviour.name
+            preferences[Keys.tapAction] = next.tapAction.name
+            preferences[Keys.longPressAction] = next.longPressAction.name
+            preferences[Keys.hapticsEnabled] = next.hapticsEnabled
+            preferences[Keys.alertIconInBubble] = next.alertIconInBubble
+            preferences[Keys.notificationShowTitle] = next.notificationShowTitle
+            preferences[Keys.motionEnabled] = next.motionEnabled
+            preferences[Keys.verboseLogging] = next.verboseLogging
             preferences[Keys.mediaEnabled] = next.mediaEnabled
             preferences[Keys.notificationsEnabled] = next.notificationsEnabled
             preferences[Keys.callsEnabled] = next.callsEnabled
@@ -345,6 +393,19 @@ private object Keys {
     val islandShape = stringPreferencesKey("island_shape")
     val highQualityMotion = booleanPreferencesKey("motion_120hz")
     val idleContractDelay = intPreferencesKey("idle_contract_delay_sec")
+    val shellColor = intPreferencesKey("shell_color_argb")
+    val shellOpacity = intPreferencesKey("shell_opacity_percent")
+    val textColor = intPreferencesKey("text_color_argb")
+    val secondaryTextColor = intPreferencesKey("secondary_text_color_argb")
+    val monochromeIcons = booleanPreferencesKey("monochrome_icons")
+    val idleBehaviour = stringPreferencesKey("idle_behaviour")
+    val tapAction = stringPreferencesKey("tap_action")
+    val longPressAction = stringPreferencesKey("long_press_action")
+    val hapticsEnabled = booleanPreferencesKey("haptics_enabled")
+    val alertIconInBubble = booleanPreferencesKey("alert_icon_in_bubble")
+    val notificationShowTitle = booleanPreferencesKey("notification_show_title")
+    val motionEnabled = booleanPreferencesKey("motion_enabled")
+    val verboseLogging = booleanPreferencesKey("verbose_logging")
     val mediaEnabled = booleanPreferencesKey("source_media_enabled")
     val notificationsEnabled = booleanPreferencesKey("source_notifications_enabled")
     val callsEnabled = booleanPreferencesKey("source_calls_enabled")
@@ -407,6 +468,19 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     islandShape = this[Keys.islandShape].enumOrDefault(IslandSettings.DEFAULT_ISLAND_SHAPE),
     highQualityMotion = this[Keys.highQualityMotion] ?: IslandSettings.DEFAULT_HIGH_QUALITY_MOTION,
     idleContractDelaySec = this[Keys.idleContractDelay] ?: IslandSettings.DEFAULT_IDLE_CONTRACT_DELAY_SEC,
+    shellColorArgb = this[Keys.shellColor] ?: IslandSettings.DEFAULT_SHELL_COLOR_ARGB,
+    shellOpacityPercent = this[Keys.shellOpacity] ?: IslandSettings.DEFAULT_SHELL_OPACITY_PERCENT,
+    textColorArgb = this[Keys.textColor] ?: IslandSettings.DEFAULT_TEXT_COLOR_ARGB,
+    secondaryTextColorArgb = this[Keys.secondaryTextColor] ?: IslandSettings.DEFAULT_SECONDARY_TEXT_COLOR_ARGB,
+    monochromeIcons = this[Keys.monochromeIcons] ?: IslandSettings.DEFAULT_MONOCHROME_ICONS,
+    idleBehaviour = this[Keys.idleBehaviour].enumOrDefault(IslandSettings.DEFAULT_IDLE_BEHAVIOUR),
+    tapAction = this[Keys.tapAction].enumOrDefault(IslandSettings.DEFAULT_TAP_ACTION),
+    longPressAction = this[Keys.longPressAction].enumOrDefault(IslandSettings.DEFAULT_LONG_PRESS_ACTION),
+    hapticsEnabled = this[Keys.hapticsEnabled] ?: IslandSettings.DEFAULT_HAPTICS_ENABLED,
+    alertIconInBubble = this[Keys.alertIconInBubble] ?: IslandSettings.DEFAULT_ALERT_ICON_IN_BUBBLE,
+    notificationShowTitle = this[Keys.notificationShowTitle] ?: IslandSettings.DEFAULT_NOTIFICATION_SHOW_TITLE,
+    motionEnabled = this[Keys.motionEnabled] ?: IslandSettings.DEFAULT_MOTION_ENABLED,
+    verboseLogging = this[Keys.verboseLogging] ?: IslandSettings.DEFAULT_VERBOSE_LOGGING,
     mediaEnabled = this[Keys.mediaEnabled] ?: true,
     notificationsEnabled = this[Keys.notificationsEnabled] ?: true,
     callsEnabled = this[Keys.callsEnabled] ?: true,
