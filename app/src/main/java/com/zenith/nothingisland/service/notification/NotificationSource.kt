@@ -198,7 +198,7 @@ class NotificationSource(private val context: Context) {
             NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
         }.getOrNull()
         val latest = messaging?.messages?.lastOrNull()
-        val sender = latest?.senderPerson?.name?.toString() ?: latest?.sender?.toString()
+        val sender = latest?.person?.name?.toString() ?: latest?.sender?.toString()
         val title = when {
             redact -> appLabel
             messaging?.conversationTitle?.isNotBlank() == true -> messaging.conversationTitle.toString()

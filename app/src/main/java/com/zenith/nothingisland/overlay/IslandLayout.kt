@@ -76,7 +76,6 @@ internal object IslandLayout {
         val top = expandedContentTopDp(holeEnabled, holeCenterYDp, holeRadiusDp, marginDp, clearanceDp)
         return max(compactHeightDp, top + lowerContentHeightDp + marginDp)
     }
-}
 
     /** A compact content region in dp. The renderer converts it to a canvas clip. */
     data class CompactRegion(val left: Float, val top: Float, val right: Float, val bottom: Float) {
@@ -162,3 +161,4 @@ internal object IslandLayout {
         val left = if (fits) desired else maxLeft.coerceAtLeast(compactLeftDp + compactWidthDp + gapDp)
         return SatellitePlacement(left, (compactHeightDp - sizeDp) / 2f, sizeDp, fits)
     }
+}
