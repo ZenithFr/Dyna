@@ -142,6 +142,7 @@ fun HomeScreen(
                 serviceEnabled = serviceEnabled,
                 islandRunning = islandRunning,
                 notificationListenerEnabled = notificationListenerEnabled,
+                notificationListenerConnected = notificationListenerConnected,
                 batteryOptimizationIgnored = batteryOptimizationIgnored,
                 overlayGranted = overlayGranted,
                 timer = timer,
