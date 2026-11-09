@@ -314,6 +314,17 @@ narrow displays. The compact width remains the calibrated value above.
 
 ## Test
 
+Real-hardware results and the remaining capture procedure are recorded in
+[`docs/DEVICE_VERIFICATION.md`](docs/DEVICE_VERIFICATION.md). The 2026-11-09 run on `master` @ `498058d`
+confirmed the build + unit tests, install, idle surface detachment and the screen-off/on suppression
+cycle; frame cost, battery soak, alert-bubble behaviour and RAM are still open.
+
+For on-device debugging turn on **Settings → Advanced → Verbose logging**, then watch
+`adb logcat -s IslandOverlay`. It reports `attach island`, `detach island`,
+`linger armed remaining=…ms`, `preview wake`, `fullscreen hide pending/cancelled` and suppression
+transitions. An idle island should log one `detach island` and then stay silent while you open and
+close apps; repeated `attach island` + full-delay `linger armed` pairs mean the old flicker loop is back.
+
 ```bash
 # Local regression tests (layout, spring math, source priority/expiry, media extrapolation)
 mise exec java@openjdk-21 -- ./gradlew testDebugUnitTest

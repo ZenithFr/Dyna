@@ -77,7 +77,12 @@ be feature-flagged and never required for the core island.
   dormant surface; listener reconnects cancel the previous settings collector.
 - Fullscreen probe fails open until calibrated by a visible status-bar reading; suppression transitions are logged.
 
-Device verification still required:
+Device verification: the first real run (2026-11-09, v0.5.0 debug) confirmed the build + JVM tests,
+install, idle surface detachment and the screen-off/on suppression cycle. Frame cost, battery soak,
+alert-bubble behaviour and RAM are still open. Evidence and the exact capture procedure live in
+[`DEVICE_VERIFICATION.md`](DEVICE_VERIFICATION.md).
+
+Still to capture:
 ```bash
 adb shell dumpsys gfxinfo com.zenith.nothingisland framestats
 adb shell dumpsys meminfo com.zenith.nothingisland
