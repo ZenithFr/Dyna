@@ -58,8 +58,18 @@ class NotificationSource(private val context: Context) {
 
     fun onPosted(sbn: StatusBarNotification, ranking: Ranking?) {
         val notification = sbn.notification ?: return
-        val source = route(sbn, notification, ranking)
+        val decision = route(sbn, notification, ranking)
+        val source = decision.source
         if (source == null) {
+            if (settings.verboseLogging) {
+                Log.d(
+                    TAG,
+                    "drop pkg=${sbn.packageName} reason=${decision.drop} " +
+                        "importance=${ranking?.importance ?: NotificationManager.IMPORTANCE_DEFAULT} " +
+                        "ranked=${ranking != null} category=${notification.category.takeIf { it in KNOWN_CATEGORIES } ?: "other"} " +
+                        "ongoing=${sbn.isOngoing || notification.flags and Notification.FLAG_ONGOING_EVENT != 0}",
+                )
+            }
             if (activeKeys.containsKey(sbn.key)) clearKey(sbn.key)
             return
         }
@@ -83,7 +93,13 @@ class NotificationSource(private val context: Context) {
             is IslandContent.Navigation -> content.signature()
             else -> return
         }
-        if (signatures[sbn.key] == signature) return
+        if (signatures[sbn.key] == signature) {
+            if (settings.verboseLogging) Log.d(TAG, "drop pkg=${sbn.packageName} reason=${NotificationDrop.UNCHANGED}")
+            return
+        }
+        if (settings.verboseLogging) {
+            Log.d(TAG, "show pkg=${sbn.packageName} source=$source")
+        }
         signatures[sbn.key] = signature
         activeKeys[sbn.key] = source
         activePackages[sbn.key] = sbn.packageName
@@ -126,32 +142,32 @@ class NotificationSource(private val context: Context) {
         signatures.remove(key)
     }
 
-    private fun route(sbn: StatusBarNotification, notification: Notification, ranking: Ranking?): IslandSource? {
-        if (sbn.packageName == context.packageName) return null
-        if (sbn.packageName in settings.disabledPackages) return null
-        if (notification.visibility == Notification.VISIBILITY_SECRET) return null
+    /** Android-side facts in, pure decision out; see [NotificationGate] for the rules. */
+    private fun route(
+        sbn: StatusBarNotification,
+        notification: Notification,
+        ranking: Ranking?,
+    ): NotificationDecision {
         @Suppress("DEPRECATION")
-        if (notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return null
-        if (isDoNotDisturbSilent()) return null
-        if (isLowImportance(ranking)) return null
-
-        val category = notification.category
-        val ongoing = sbn.isOngoing || notification.flags and Notification.FLAG_ONGOING_EVENT != 0
-        if (category == Notification.CATEGORY_CALL) {
-            return if (settings.callsEnabled) IslandSource.Call else null
-        }
-        if (isMedia(notification)) return null
-        if (category == Notification.CATEGORY_SERVICE) return null
-        if (category == Notification.CATEGORY_NAVIGATION ||
-            (ongoing && sbn.packageName in PopularIntegrations.mapsPackages)
-        ) {
-            return if (settings.navigationEnabled) IslandSource.Navigation else null
-        }
-        if (hasProgress(notification)) {
-            return if (settings.downloadsEnabled) IslandSource.Download else null
-        }
-        if (ongoing) return null
-        return if (settings.notificationsEnabled) IslandSource.Notification else null
+        val groupSummary = notification.flags and Notification.FLAG_GROUP_SUMMARY != 0
+        return NotificationGate.decide(
+            packageName = sbn.packageName,
+            ownPackageName = context.packageName,
+            disabledPackages = settings.disabledPackages,
+            isSecret = notification.visibility == Notification.VISIBILITY_SECRET,
+            isGroupSummary = groupSummary,
+            doNotDisturbNone = isDoNotDisturbSilent(),
+            importance = ranking?.importance ?: NotificationManager.IMPORTANCE_DEFAULT,
+            category = notification.category,
+            isMedia = isMedia(notification),
+            isOngoing = sbn.isOngoing || notification.flags and Notification.FLAG_ONGOING_EVENT != 0,
+            hasProgress = hasProgress(notification),
+            callsEnabled = settings.callsEnabled,
+            notificationsEnabled = settings.notificationsEnabled,
+            downloadsEnabled = settings.downloadsEnabled,
+            navigationEnabled = settings.navigationEnabled,
+            showSilentNotifications = settings.showSilentNotifications,
+        )
     }
 
     private fun callContent(
@@ -295,9 +311,6 @@ class NotificationSource(private val context: Context) {
         notificationManager?.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_NONE
     }.getOrDefault(false)
 
-    private fun isLowImportance(ranking: Ranking?): Boolean =
-        (ranking?.importance ?: NotificationManager.IMPORTANCE_DEFAULT) <= NotificationManager.IMPORTANCE_LOW
-
     private fun text(notification: Notification, key: String): String? {
         val value = notification.extras?.getCharSequence(key)?.toString()?.trim()
         return value?.takeIf { it.isNotEmpty() }
@@ -374,6 +387,25 @@ class NotificationSource(private val context: Context) {
         const val TAG = "IslandNotifications"
         const val MAX_ACTIONS = 2
         const val MAX_PACKAGE_ICONS = 12
+        // Categories are app-supplied strings. Log only standard values, never an app's free text.
+        val KNOWN_CATEGORIES = setOf(
+            Notification.CATEGORY_CALL,
+            Notification.CATEGORY_MESSAGE,
+            Notification.CATEGORY_EMAIL,
+            Notification.CATEGORY_EVENT,
+            Notification.CATEGORY_PROMO,
+            Notification.CATEGORY_ALARM,
+            Notification.CATEGORY_PROGRESS,
+            Notification.CATEGORY_SOCIAL,
+            Notification.CATEGORY_ERROR,
+            Notification.CATEGORY_TRANSPORT,
+            Notification.CATEGORY_SYSTEM,
+            Notification.CATEGORY_SERVICE,
+            Notification.CATEGORY_REMINDER,
+            Notification.CATEGORY_RECOMMENDATION,
+            Notification.CATEGORY_STATUS,
+            Notification.CATEGORY_NAVIGATION,
+        )
     }
 }
 

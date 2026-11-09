@@ -84,6 +84,7 @@ fun HomeScreen(
     serviceEnabled: Boolean,
     islandRunning: Boolean,
     notificationListenerEnabled: Boolean,
+    notificationListenerConnected: Boolean,
     batteryOptimizationIgnored: Boolean,
     overlayGranted: Boolean,
     timer: IslandContent.Timer?,
@@ -98,6 +99,7 @@ fun HomeScreen(
     onRequestIgnoreBatteryOptimizations: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onRefreshStatus: () -> Unit,
+    onShowTestAlert: () -> Unit,
     onSettingsChange: ((IslandSettings) -> IslandSettings) -> Unit,
 ) {
     // The page is stored by name so the open category survives configuration/process death without
@@ -124,6 +126,7 @@ fun HomeScreen(
                 serviceEnabled = serviceEnabled,
                 islandRunning = islandRunning,
                 notificationListenerEnabled = notificationListenerEnabled,
+                notificationListenerConnected = notificationListenerConnected,
                 timer = timer,
                 timerPresetMinutes = timerPresetMinutes,
                 onTimerPresetChange = onTimerPresetChange,
@@ -153,6 +156,7 @@ fun HomeScreen(
                 onRequestIgnoreBatteryOptimizations = onRequestIgnoreBatteryOptimizations,
                 onOpenOverlaySettings = onOpenOverlaySettings,
                 onRefreshStatus = onRefreshStatus,
+                onShowTestAlert = onShowTestAlert,
                 onSettingsChange = onSettingsChange,
                 onBack = { pageName = null },
             )
@@ -237,6 +241,7 @@ internal fun ServiceStatusCard(enabled: Boolean, running: Boolean) {
 internal fun SetupPanel(
     serviceEnabled: Boolean,
     notificationListenerEnabled: Boolean,
+    notificationListenerConnected: Boolean,
     batteryOptimizationIgnored: Boolean,
     overlayGranted: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
@@ -267,12 +272,12 @@ internal fun SetupPanel(
         SetupDivider()
         SetupItem(
             title = "Notification listener",
-            description = if (notificationListenerEnabled) {
-                "Enabled. Media controls and notification mirroring are live."
-            } else {
-                "Required for media controls and notification mirroring; also unlocks media access."
+            description = when {
+                notificationListenerConnected -> "Connected. Notification mirroring and media access are live."
+                notificationListenerEnabled -> "Access granted, but Android has not connected the listener. Try toggling notification access off and on."
+                else -> "Required for media controls and notification mirroring; also unlocks media access."
             },
-            status = if (notificationListenerEnabled) SetupStatus.Done else SetupStatus.Todo,
+            status = if (notificationListenerConnected) SetupStatus.Done else SetupStatus.Todo,
             actionLabel = if (notificationListenerEnabled) "MANAGE" else "ENABLE",
             onClick = onOpenNotificationListenerSettings,
         )

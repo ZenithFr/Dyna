@@ -96,6 +96,7 @@ fun IslandSettings.resetCategory(category: IslandSettingsCategory): IslandSettin
             autoExpandCalls = defaults.autoExpandCalls,
             alertIconInBubble = defaults.alertIconInBubble,
             notificationShowTitle = defaults.notificationShowTitle,
+            showSilentNotifications = defaults.showSilentNotifications,
             disabledPackages = defaults.disabledPackages,
         )
         IslandSettingsCategory.SOURCES -> copy(

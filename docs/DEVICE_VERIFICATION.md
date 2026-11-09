@@ -122,3 +122,78 @@ bubble** off to see the icon return to the pill.
 adb shell dumpsys meminfo com.zenith.nothingisland
 # Swap tracks 10 times in a music app, then re-read; Java heap / graphics should not climb steadily.
 ```
+
+### G. WhatsApp / Discord delivery, including silent notifications
+
+**Status: pending on-device verification.** Run 1 above used `498058d`, before this repair. Do not
+record the new routing tests or source inspection as a real WhatsApp/Discord result.
+
+The old manifest requested only `conversations|alerting`. Android therefore withheld SILENT and
+ONGOING posts before our listener ran. The app then independently dropped importance LOW. The repair
+removes the manifest restriction, migrates an existing listener's saved type mask once, and shows
+silent messages by default with a user opt-out. Generic ongoing services remain filtered in app;
+calls, progress and maps are classified first.
+
+1. Build and install **over the existing app**; do not clear data or uninstall:
+
+   ```bash
+   mise exec java@openjdk-21 -- ./gradlew testDebugUnitTest assembleDebug
+   adb install -r app/build/outputs/apk/debug/app-debug.apk
+   adb shell am start -n com.zenith.nothingisland/.MainActivity
+   ```
+
+2. Enable **Advanced → Verbose logging**. In **Setup → Diagnostics**, require `Overlay service:
+   RUNNING`, `Notification access: YES`, and `Notification listener: CONNECTED`. Use **Re-check now**
+   after changing a grant. If the listener stays WAITING, toggle its system notification access off/on.
+   **Show test alert** should show the synthetic pill/bubble even if notification access is off; that
+   proves only the overlay path.
+3. Start a clean log capture, then send a new message from another account/device to WhatsApp and
+   Discord. Leave the phone unlocked and outside fullscreen/landscape hiding for this check.
+
+   ```bash
+   adb logcat -c
+   adb logcat -s IslandNotificationListener:I IslandNotifications:D IslandOverlay:D IslandService:I
+   ```
+
+   Expected after the upgrade's first listener connection:
+
+   ```text
+   listener connected
+   all notification types migration requested
+   show pkg=com.whatsapp source=Notification
+   show pkg=com.discord source=Notification
+   attach island (phase=CONTENT, source=Notification)
+   ```
+
+   INFO bind/migration lines appear even with verbose off; package/source/drop and overlay lines need
+   verbose on. The migration line means the request was issued, not that a particular app has posted.
+4. Mark a test conversation/channel **Silent** (or use Android's gentle notification control), send a
+   new message, and repeat. With **Notifications & apps → Silent notifications** on, it should still
+   show. Turn that setting off: expect `drop pkg=… reason=IMPORTANCE importance=2` for the silent post,
+   while an alerting message still shows. Turn it back on afterwards. App-internal mute alone does not
+   guarantee Android importance LOW; use the OS silent/gentle classification for this regression.
+5. Reconnect the listener once more. The migration should not be requested again; later system type
+   choices must not be overwritten on every bind. A reinstall with cleared app data is a separate
+   fresh-install case, not the upgrade migration test.
+
+Drop reasons and the next check:
+
+| Log reason | Meaning / action |
+| --- | --- |
+| `OVERLAY_STOPPED` | Listener received the post, but accessibility overlay was not running. Enable it and send a **new** message; old shade entries are not replayed. |
+| `IMPORTANCE` | Importance MIN/NONE is always ignored; LOW is ignored only when Silent notifications is off. The numeric importance is included. |
+| `DISABLED_PACKAGE` / `NOTIFICATIONS_OFF` | Check the per-app opt-out and Sources → Notifications switch. |
+| `DO_NOT_DISTURB` | Total-silence DND blocks island alerts. Retry outside that mode. |
+| `GROUP_SUMMARY` | Summary intentionally skipped; the individual child message should produce its own accepted line. |
+| `MEDIA` / `SERVICE` / `ONGOING` | Media goes through MediaSession; a plain foreground-service status is not a message. Calls/downloads/maps should use their own source instead. |
+| `CALLS_OFF` / `DOWNLOADS_OFF` / `NAVIGATION_OFF` | Enable the corresponding source. |
+| `SECRET` / `OWN_PACKAGE` | Hidden notification / our own system notification intentionally skipped. The in-app test alert bypasses this listener path. |
+| `UNCHANGED` | Same key and rendered signature already accepted; not a new alert. A changed message should produce a new signature. |
+| `Dropped malformed notification` | Always-on warning with exception; capture the stack trace. |
+| No listener lines at all | Check live bind state, system notification-type/package filters and whether the sending app actually posted a notification. An overlay-only test cannot diagnose this. |
+
+Logs contain package names and routing facts, not titles, bodies, custom category text or notification
+keys. Unrecognized categories appear as `other`. Turn verbose logging off after capture. Record the build commit, grant/connection rows, normal/silent results and
+relevant log lines here only after running them on the phone.
+
+---

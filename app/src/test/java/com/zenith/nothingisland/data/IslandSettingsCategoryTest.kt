@@ -24,6 +24,7 @@ class IslandSettingsCategoryTest {
         hapticsEnabled = false,
         alertIconInBubble = false,
         notificationShowTitle = false,
+        showSilentNotifications = false,
         notificationDurationSec = 8,
         mediaEnabled = false,
         motionEnabled = false,
@@ -59,6 +60,7 @@ class IslandSettingsCategoryTest {
         assertEquals(customized.shellColorArgb, reset.shellColorArgb)
         assertEquals(customized.notificationDurationSec, reset.notificationDurationSec)
         assertEquals(customized.alertIconInBubble, reset.alertIconInBubble)
+        assertEquals(customized.showSilentNotifications, reset.showSilentNotifications)
     }
 
     @Test
@@ -67,6 +69,7 @@ class IslandSettingsCategoryTest {
         assertTrue(reset.disabledPackages.isEmpty())
         assertTrue(reset.alertIconInBubble)
         assertTrue(reset.notificationShowTitle)
+        assertTrue(reset.showSilentNotifications)
         assertEquals(IslandSettings.DEFAULT_NOTIFICATION_DURATION_SEC, reset.notificationDurationSec)
         // Sources are a different page.
         assertEquals(customized.mediaEnabled, reset.mediaEnabled)

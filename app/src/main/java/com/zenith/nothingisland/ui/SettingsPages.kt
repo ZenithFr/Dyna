@@ -45,6 +45,7 @@ internal fun SettingsHub(
     serviceEnabled: Boolean,
     islandRunning: Boolean,
     notificationListenerEnabled: Boolean,
+    notificationListenerConnected: Boolean,
     timer: IslandContent.Timer?,
     timerPresetMinutes: Int,
     onTimerPresetChange: (Int) -> Unit,
@@ -58,14 +59,16 @@ internal fun SettingsHub(
     Spacer(Modifier.height(24.dp))
     ServiceStatusCard(enabled = serviceEnabled, running = islandRunning)
 
-    if (!serviceEnabled || !notificationListenerEnabled) {
+    if (!serviceEnabled || !notificationListenerEnabled || !notificationListenerConnected) {
         Spacer(Modifier.height(12.dp))
         NavigationRow(
             title = "Finish setup",
             summary = if (!serviceEnabled) {
                 "Accessibility access is required before the island can draw."
-            } else {
+            } else if (!notificationListenerEnabled) {
                 "Notification access unlocks messages, calls and media."
+            } else {
+                "Notification access is granted; waiting for the listener to connect."
             },
             highlighted = true,
         ) { onOpenPage(IslandSettingsCategory.SETUP) }
@@ -130,6 +133,7 @@ internal fun SettingsPage(
     onRequestIgnoreBatteryOptimizations: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onRefreshStatus: () -> Unit,
+    onShowTestAlert: () -> Unit,
     onSettingsChange: ((IslandSettings) -> IslandSettings) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -141,6 +145,7 @@ internal fun SettingsPage(
             SetupPanel(
                 serviceEnabled = serviceEnabled,
                 notificationListenerEnabled = notificationListenerEnabled,
+                notificationListenerConnected = notificationListenerConnected,
                 batteryOptimizationIgnored = batteryOptimizationIgnored,
                 overlayGranted = overlayGranted,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
@@ -156,6 +161,7 @@ internal fun SettingsPage(
                 batteryOptimizationIgnored = batteryOptimizationIgnored,
                 overlayGranted = overlayGranted,
                 onRefreshStatus = onRefreshStatus,
+                onShowTestAlert = onShowTestAlert,
             )
         }
 
@@ -233,9 +239,17 @@ internal fun SettingsPage(
             PanelCard {
                 ToggleRow(
                     "Verbose logging",
-                    "Log island idle/suppression transitions to logcat under IslandOverlay. Off by default; turn on only while reproducing a bug.",
+                    "Log overlay transitions (IslandOverlay) and notification accept/drop reasons (IslandNotifications). Listener binds are always logged at INFO. No titles, bodies, custom category text or notification keys are logged. Verbose is off by default.",
                     settings.verboseLogging,
                 ) { onSettingsChange { s -> s.copy(verboseLogging = it) } }
+                HorizontalDivider(color = NothingHairline, thickness = 1.dp)
+                DiagnosticRow(
+                    "Notification listener",
+                    if (notificationListenerConnected) "CONNECTED" else if (notificationListenerEnabled) "WAITING" else "OFF",
+                )
+                ActionRow("Re-check status", "Refresh the grant and live listener connection") {
+                    onRefreshStatus()
+                }
             }
             PageSection("Restore defaults")
             PanelCard {
@@ -388,20 +402,31 @@ private fun DiagnosticsPanel(
     serviceEnabled: Boolean,
     islandRunning: Boolean,
     notificationListenerEnabled: Boolean,
+    notificationListenerConnected: Boolean,
     batteryOptimizationIgnored: Boolean,
     overlayGranted: Boolean,
     onRefreshStatus: () -> Unit,
+    onShowTestAlert: () -> Unit,
 ) {
     PanelCard {
         DiagnosticRow("Accessibility granted", if (serviceEnabled) "YES" else "NO")
         DiagnosticRow("Overlay service", if (islandRunning) "RUNNING" else "STOPPED")
         DiagnosticRow("Notification access", if (notificationListenerEnabled) "YES" else "NO")
+        DiagnosticRow(
+            "Notification listener",
+            if (notificationListenerConnected) "CONNECTED" else if (notificationListenerEnabled) "WAITING" else "OFF",
+        )
         DiagnosticRow("Battery optimisation", if (batteryOptimizationIgnored) "EXEMPT" else "OPTIMIZED")
         DiagnosticRow("Overlay permission", if (overlayGranted) "GRANTED" else "NOT NEEDED")
         HorizontalDivider(color = NothingHairline, thickness = 1.dp)
         ActionRow("Re-check now", "Status is read on resume; use this after changing a permission") {
             onRefreshStatus()
         }
+        HorizontalDivider(color = NothingHairline, thickness = 1.dp)
+        ActionRow(
+            "Show test alert",
+            "Preview the pill and app-icon bubble. This checks the overlay only, not notification access.",
+        ) { onShowTestAlert() }
     }
 }
 

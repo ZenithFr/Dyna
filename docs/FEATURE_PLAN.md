@@ -46,9 +46,13 @@ be feature-flagged and never required for the core island.
   speed, idle behaviour + linger, portrait lock.
 - Appearance: shell colour/opacity, primary/secondary text colour, text scale, monochrome icons.
 - Interaction: idle behaviour (hide in lens / keep pill), tap action, long-press action, haptics.
-- Alert content: app icon in the detached bubble, title in the compact pill.
+- Alert content: app icon in the detached bubble, title in the compact pill, silent/gentle alerts
+  (on by default; importance MIN/NONE still ignored).
 - Pages: Setup, Appearance, Layout, Camera hole, Notifications & apps, Sources & timer, Behaviour,
   Motion & battery, Advanced — each with its own reset scope; Advanced adds verbose logging.
+- Delivery diagnostics: separate access grant from live listener connection; overlay-only test alert;
+  per-notification source/drop logs without message text or keys. The OS listener filter allows all
+  four types, with a one-time upgrade migration instead of silently retaining the old restricted mask.
 - Colour: shell stroke plus timer/charging/battery-low/power-saver/call answer/decline/download/maps accents.
 
 ## Performance budget (CMF 120 Hz)
@@ -81,6 +85,9 @@ Device verification: the first real run (2026-11-09, v0.5.0 debug) confirmed the
 install, idle surface detachment and the screen-off/on suppression cycle. Frame cost, battery soak,
 alert-bubble behaviour and RAM are still open. Evidence and the exact capture procedure live in
 [`DEVICE_VERIFICATION.md`](DEVICE_VERIFICATION.md).
+
+The WhatsApp/Discord silent-delivery fix is source-tested only until procedure G in that guide is run
+on the phone; the earlier device run predates this fix.
 
 Still to capture:
 ```bash
