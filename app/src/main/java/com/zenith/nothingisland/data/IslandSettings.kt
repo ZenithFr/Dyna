@@ -80,6 +80,8 @@ data class IslandSettings(
     /** Alert app icons ride in the detached bubble; the shell keeps the text. */
     val alertIconInBubble: Boolean = DEFAULT_ALERT_ICON_IN_BUBBLE,
     val notificationShowTitle: Boolean = DEFAULT_NOTIFICATION_SHOW_TITLE,
+    /** Silent/gentle notifications (importance LOW), including some muted chats, are shown by default. */
+    val showSilentNotifications: Boolean = DEFAULT_SHOW_SILENT_NOTIFICATIONS,
 
     // Expanded geometry / typography.
     val expandedMaxWidthDp: Int = DEFAULT_EXPANDED_MAX_WIDTH_DP,
@@ -212,6 +214,7 @@ data class IslandSettings(
         const val DEFAULT_HAPTICS_ENABLED = true
         const val DEFAULT_ALERT_ICON_IN_BUBBLE = true
         const val DEFAULT_NOTIFICATION_SHOW_TITLE = true
+        const val DEFAULT_SHOW_SILENT_NOTIFICATIONS = true
         const val DEFAULT_MOTION_ENABLED = true
         const val DEFAULT_VERBOSE_LOGGING = false
         const val DEFAULT_NOTIFICATION_DURATION_SEC = 4
@@ -293,6 +296,7 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.hapticsEnabled] = next.hapticsEnabled
             preferences[Keys.alertIconInBubble] = next.alertIconInBubble
             preferences[Keys.notificationShowTitle] = next.notificationShowTitle
+            preferences[Keys.showSilentNotifications] = next.showSilentNotifications
             preferences[Keys.motionEnabled] = next.motionEnabled
             preferences[Keys.verboseLogging] = next.verboseLogging
             preferences[Keys.mediaEnabled] = next.mediaEnabled
@@ -404,6 +408,7 @@ private object Keys {
     val hapticsEnabled = booleanPreferencesKey("haptics_enabled")
     val alertIconInBubble = booleanPreferencesKey("alert_icon_in_bubble")
     val notificationShowTitle = booleanPreferencesKey("notification_show_title")
+    val showSilentNotifications = booleanPreferencesKey("show_silent_notifications")
     val motionEnabled = booleanPreferencesKey("motion_enabled")
     val verboseLogging = booleanPreferencesKey("verbose_logging")
     val mediaEnabled = booleanPreferencesKey("source_media_enabled")
@@ -479,6 +484,7 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     hapticsEnabled = this[Keys.hapticsEnabled] ?: IslandSettings.DEFAULT_HAPTICS_ENABLED,
     alertIconInBubble = this[Keys.alertIconInBubble] ?: IslandSettings.DEFAULT_ALERT_ICON_IN_BUBBLE,
     notificationShowTitle = this[Keys.notificationShowTitle] ?: IslandSettings.DEFAULT_NOTIFICATION_SHOW_TITLE,
+    showSilentNotifications = this[Keys.showSilentNotifications] ?: IslandSettings.DEFAULT_SHOW_SILENT_NOTIFICATIONS,
     motionEnabled = this[Keys.motionEnabled] ?: IslandSettings.DEFAULT_MOTION_ENABLED,
     verboseLogging = this[Keys.verboseLogging] ?: IslandSettings.DEFAULT_VERBOSE_LOGGING,
     mediaEnabled = this[Keys.mediaEnabled] ?: true,

@@ -448,6 +448,11 @@ internal fun NotificationContentPanel(settings: IslandSettings, onSettingsChange
             "Off leaves the compact shell empty while the bubble carries the app icon.",
             settings.notificationShowTitle,
         ) { onSettingsChange { s -> s.copy(notificationShowTitle = it) } }
+        ToggleRow(
+            "Silent notifications",
+            "Show notifications marked Silent by Android, including gentle alerts and some muted chats. The island does not play notification sounds. Off shows alerting notifications only; total-silence Do Not Disturb still blocks alerts.",
+            settings.showSilentNotifications,
+        ) { onSettingsChange { s -> s.copy(showSilentNotifications = it) } }
     }
 }
 

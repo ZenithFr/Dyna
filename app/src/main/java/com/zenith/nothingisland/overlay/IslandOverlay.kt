@@ -206,6 +206,7 @@ class IslandOverlay(private val serviceContext: Context) {
         if (event?.content != null) return
         idlePhase = IslandIdlePhase.LINGERING
         idleSinceMs = SystemClock.elapsedRealtime()
+        logv { "preview wake (settings edit)" }
         pill.render(event)
         apply()
     }
@@ -224,10 +225,21 @@ class IslandOverlay(private val serviceContext: Context) {
         calibrating = settings.showHoleGuide && settings.holeEnabled,
     )
 
+    /**
+     * Verbose diagnostics, off by default. Inline so the message string is never built (and no
+     * lambda object is allocated) unless the user turned logging on to chase a bug.
+     *
+     * The lines that matter when reproducing the old flicker: `attach`/`detach` and `linger armed`.
+     * A healthy idle island logs one detach and then nothing at all while apps are opened/closed.
+     */
+    private inline fun logv(message: () -> String) {
+        if (settings.verboseLogging) Log.d(TAG, message())
+    }
+
     /** The curl landed: release the surface and remember that only real content may wake it. */
     private fun enterDormant() {
         idlePhase = IslandIdlePhase.DORMANT
-        if (settings.verboseLogging) Log.d(TAG, "idle -> DORMANT (surface released)")
+        logv { "idle -> DORMANT (surface released)" }
         hide()
     }
 
@@ -241,7 +253,7 @@ class IslandOverlay(private val serviceContext: Context) {
             cancelIdleContraction()
         } else if (previousPhase == IslandIdlePhase.CONTENT) {
             idleSinceMs = SystemClock.elapsedRealtime()
-            if (settings.verboseLogging) Log.d(TAG, "idle -> LINGERING")
+            logv { "idle -> LINGERING (${settings.idleContractDelaySec}s)" }
         }
         // A compact media position tick changes nothing on screen; keep the fresh snapshot for the
         // next expansion but skip the measure/relayout/accessibility pass entirely.
@@ -271,6 +283,7 @@ class IslandOverlay(private val serviceContext: Context) {
         layoutParams = null
         removeTouchWindow()
         if (hadIsland || pill.parent != null) {
+            logv { "detach island (phase=$idlePhase, suppression=$suppression)" }
             runCatching { windowManager.removeViewImmediate(pill) }
                 .onFailure { Log.w(TAG, "Island window was already detached", it) }
         }
@@ -328,6 +341,7 @@ class IslandOverlay(private val serviceContext: Context) {
                     // Wait out the app-transition blink before giving up the surface.
                     if (pendingSuppression != next) {
                         pendingSuppression = next
+                        logv { "fullscreen hide pending (${IslandVisibilityPolicy.FULLSCREEN_HIDE_DEBOUNCE_MS}ms)" }
                         idleHandler.removeCallbacks(commitSuppressionRunnable)
                         idleHandler.postDelayed(commitSuppressionRunnable, IslandVisibilityPolicy.FULLSCREEN_HIDE_DEBOUNCE_MS)
                     }
@@ -348,6 +362,11 @@ class IslandOverlay(private val serviceContext: Context) {
     }
 
     private fun cancelPendingSuppression() {
+        if (pendingSuppression != null) {
+            // The status bar came back before the debounce elapsed: this is the app-switch blink
+            // that used to detach and re-attach the island.
+            logv { "fullscreen hide cancelled (status bar back)" }
+        }
         pendingSuppression = null
         idleHandler.removeCallbacks(commitSuppressionRunnable)
     }
@@ -390,7 +409,10 @@ class IslandOverlay(private val serviceContext: Context) {
         if (existing == null) {
             val params = buildLayoutParams(window, touchable = false)
             runCatching { windowManager.addView(pill, params) }
-                .onSuccess { layoutParams = params }
+                .onSuccess {
+                    layoutParams = params
+                    logv { "attach island (phase=$idlePhase, source=${event?.source ?: "none"})" }
+                }
                 .onFailure { Log.e(TAG, "Unable to add island overlay", it) }
         } else if (
             existing.width != window.widthPx ||
@@ -521,6 +543,8 @@ class IslandOverlay(private val serviceContext: Context) {
         // delay honest: the pending callback would otherwise fire on the old value.
         idleHandler.removeCallbacks(contractWhenIdle)
         idleHandler.postDelayed(contractWhenIdle, remainingMs)
+        // Repeated "linger armed" lines with a full delay while idle = the old resurrection bug.
+        logv { "linger armed remaining=${remainingMs}ms" }
     }
 
     private fun cancelIdleContraction() {

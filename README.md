@@ -23,14 +23,19 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   `MediaController.Callback` (no polling). Artwork is downscaled and sampled for accent color only
   when its identity changes. The original full-size bitmap is not strongly retained; only the
   bounded thumbnail is kept, and decorative playing bars are opt-in.
-- **Notifications**: an alerting notification shows the app icon **in the detached bubble** and the
+- **Notifications**: a message alert shows the app icon **in the detached bubble** and the
   title in the shell for 4 s (both configurable; the icon can be moved back into the pill). The bubble
   retracts on the same mitosis spring the moment the hold expires, so nothing is left beside the lens.
   Tap to expand
   for title, text and up to two actions below the lens (inline reply included). Private/secret
-  notifications are redacted or skipped while the keyguard is locked. Filtering skips ongoing,
-  group-summary, low-importance, media/call and own-package notifications, and anything while
-  Do Not Disturb is set to *none*. If the reply overlay cannot take focus, the conversation's
+  notifications are redacted or skipped while the keyguard is locked. Silent/gentle notifications
+  (Android importance LOW), including some muted chats, are shown by default; **Notifications & apps →
+  Silent notifications** turns them off. IMPORTANCE_MIN/NONE, generic ongoing services, group summaries,
+  media notifications, opted-out apps and our own package are skipped. Calls, progress and navigation
+  are routed to their dedicated sources before the generic ongoing filter. Anything while Do Not Disturb
+  is set to *none* is skipped. The listener accepts all four Android notification types and migrates
+  the old restrictive mask once on upgrade, so silent messages and ongoing calls/downloads can reach
+  the app-level gate. If the reply overlay cannot take focus, the conversation's
   content intent is opened instead of sending a result-less reply intent. When the alert expires
   the island falls back to the persistent base (timer, then maps, then downloads, then media),
   else idle.
@@ -127,7 +132,7 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   behaviour, linger, tap action, long-press action and haptics are selectable; motion has a master
   switch, a 120 Hz morph hint, opt-in ambient loops with a separate rate and a speed scale; each source
   accent has swatches + hex entry. Popular apps can be opted out per package.
-- Setup page with live grant status for the accessibility service, notification listener, battery
+- Setup page with grant status, the listener's actual connected/waiting state, battery
   optimisation and overlay permission, plus a diagnostics card and an explicit re-check action. Grant
   status is read on resume (event-driven) instead of a 1.5 s polling loop. Settings controls use Material 3 with
   48 dp touch targets, wrapping chip rows and whole-row switches; the canvas island exposes its
@@ -239,6 +244,17 @@ adb shell cmd notification get_listeners | grep -i nothingisland
 module stays idle (and silent) until the listener is enabled. Revoke with
 `adb shell cmd notification disallow_listener <component>`.
 
+**Grant is not connection.** Setup → Diagnostics separately shows `Notification access: YES/NO` and
+`Notification listener: CONNECTED/WAITING/OFF`; Advanced shows the listener state too. Use **Re-check
+now** after changing access. Both the listener and the accessibility overlay must be live for messages
+to appear. If access stays granted but the listener stays WAITING, toggle notification access off/on.
+**Show test alert** posts synthetic content directly through the running overlay, bypassing the
+listener's own-package guard. It tests the pill/bubble only, not notification access or WhatsApp/Discord.
+
+After upgrading, keep notification access enabled and open the app once so the listener can connect.
+Its one-time filter migration restores conversations, alerting, silent and ongoing delivery; later
+system type choices are not reset on every reconnect. No app-data clear or reinstall is needed.
+
 ### 4. Overlay permission (informational, not required)
 
 `TYPE_ACCESSIBILITY_OVERLAY` does **not** need `SYSTEM_ALERT_WINDOW`. The row is shown for
@@ -300,6 +316,7 @@ clamped to safe ranges:
 | Monochrome icons | on/off | off |
 | App icon in detached bubble | on/off (notifications + calls) | on |
 | Show title in pill | on/off | on |
+| Silent notifications | on/off | on |
 | Verbose logging | on/off | off |
 | Ambient animations | on/off (visible decorative loops only) | off |
 | Ambient loop rate | 30 … 120 Hz | 30 Hz |
@@ -314,8 +331,25 @@ narrow displays. The compact width remains the calibrated value above.
 
 ## Test
 
+Real-hardware results and the remaining capture procedure are recorded in
+[`docs/DEVICE_VERIFICATION.md`](docs/DEVICE_VERIFICATION.md). The 2026-11-09 run on `master` @ `498058d`
+confirmed the build + unit tests, install, idle surface detachment and the screen-off/on suppression
+cycle; frame cost, battery soak, alert-bubble behaviour and RAM are still open.
+
+For on-device debugging turn on **Settings → Advanced → Verbose logging**, then watch
+`adb logcat -s IslandOverlay`. It reports `attach island`, `detach island`,
+`linger armed remaining=…ms`, `preview wake`, `fullscreen hide pending/cancelled` and suppression
+transitions. An idle island should log one `detach island` and then stay silent while you open and
+close apps; repeated `attach island` + full-delay `linger armed` pairs mean the old flicker loop is back.
+
+For missing WhatsApp/Discord alerts, also watch `IslandNotificationListener` and
+`IslandNotifications`. Verbose mode logs the package, accepted source or explicit drop reason,
+importance and ongoing/category facts — never message text, custom category text or notification keys. Listener
+connect/disconnect and the one-time migration log at INFO even with verbose off. See procedure G in
+the device-verification guide for an upgrade-preserving real-app check.
+
 ```bash
-# Local regression tests (layout, spring math, source priority/expiry, media extrapolation)
+# Local regression tests (layout, motion, state, notification routing, settings)
 mise exec java@openjdk-21 -- ./gradlew testDebugUnitTest
 
 # 0. Build + install
@@ -334,9 +368,13 @@ adb shell cmd notification allow_listener \
 #    below the lens. Unsupported transport buttons must be disabled.
 adb shell am start -a android.intent.action.VIEW -d https://music.youtube.com
 
-# 3. Notification: post a synthetic alert
-#    compact for 4s, tap to expand (text + up to 2 actions), replies send RemoteInput
+# 3a. Overlay-only test: Setup -> Diagnostics -> Show test alert.
+#     This bypasses notification access; it is not a listener-delivery test.
+# 3b. External synthetic notification through the real listener:
+#     compact for the configured hold, tap to expand (text + up to 2 actions), replies send RemoteInput
 adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the island to expand."
+# 3c. Send real WhatsApp/Discord messages, including a Silent/gentle channel; see procedure G in
+#     docs/DEVICE_VERIFICATION.md. Expected: show pkg=com.whatsapp/com.discord source=Notification.
 
 # 4. Charging: plug/unplug. Expect a 4s bolt + percentage card; at 100% it reads FULL.
 
@@ -369,7 +407,7 @@ adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the 
 #    Check long titles, RTL/emoji titles, font scale 1.3, and a low/large calibrated lens.
 
 # Logs
-adb logcat -s IslandOverlay IslandVisibility IslandService IslandMedia IslandNotifications IslandCharging IslandReply IslandHole
+adb logcat -s IslandOverlay IslandVisibility IslandService IslandMedia IslandNotificationListener IslandNotifications IslandCharging IslandReply IslandHole
 ```
 
 ## Project layout

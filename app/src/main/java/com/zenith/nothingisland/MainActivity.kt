@@ -27,6 +27,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.zenith.nothingisland.data.IslandSettings
 import com.zenith.nothingisland.data.IslandSettingsRepository
 import com.zenith.nothingisland.service.IslandService
+import com.zenith.nothingisland.service.notification.IslandNotificationListener
 import com.zenith.nothingisland.service.timer.TimerModule
 import com.zenith.nothingisland.ui.HomeScreen
 import com.zenith.nothingisland.ui.theme.NothingIslandTheme
@@ -58,6 +59,9 @@ class MainActivity : ComponentActivity() {
                 var notificationListenerEnabled by remember {
                     mutableStateOf(ServiceStatus.isNotificationListenerEnabled(this@MainActivity))
                 }
+                var notificationListenerConnected by remember {
+                    mutableStateOf(IslandNotificationListener.isConnected)
+                }
                 var batteryOptimizationIgnored by remember {
                     mutableStateOf(ServiceStatus.isIgnoringBatteryOptimizations(this@MainActivity))
                 }
@@ -72,6 +76,7 @@ class MainActivity : ComponentActivity() {
                     islandRunning = IslandService.isRunning
                     notificationListenerEnabled =
                         ServiceStatus.isNotificationListenerEnabled(this@MainActivity)
+                    notificationListenerConnected = IslandNotificationListener.isConnected
                     batteryOptimizationIgnored =
                         ServiceStatus.isIgnoringBatteryOptimizations(this@MainActivity)
                     overlayGranted = ServiceStatus.canDrawOverlays(this@MainActivity)
@@ -95,6 +100,7 @@ class MainActivity : ComponentActivity() {
                     serviceEnabled = serviceEnabled,
                     islandRunning = islandRunning,
                     notificationListenerEnabled = notificationListenerEnabled,
+                    notificationListenerConnected = notificationListenerConnected,
                     batteryOptimizationIgnored = batteryOptimizationIgnored,
                     overlayGranted = overlayGranted,
                     timer = timer,
@@ -120,6 +126,18 @@ class MainActivity : ComponentActivity() {
                     onRequestIgnoreBatteryOptimizations = ::requestIgnoreBatteryOptimizations,
                     onOpenOverlaySettings = ::openOverlaySettings,
                     onRefreshStatus = { refreshGrants() },
+                    onShowTestAlert = {
+                        val service = IslandService.instance
+                        if (service == null) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Enable the accessibility service first",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            service.showTestAlert()
+                        }
+                    },
                     onSettingsChange = { transform ->
                         // The service collects the DataStore flow, so this is all that live updates
                         // need; the preview wake makes an idle island visible while editing.

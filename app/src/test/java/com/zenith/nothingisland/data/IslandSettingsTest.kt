@@ -66,12 +66,20 @@ class IslandSettingsTest {
         // The requested alert presentation is on out of the box.
         assertTrue(defaults.alertIconInBubble)
         assertTrue(defaults.notificationShowTitle)
+        assertTrue(defaults.showSilentNotifications)
         assertTrue(defaults.motionEnabled)
         assertTrue(defaults.hapticsEnabled)
         assertFalse(defaults.monochromeIcons)
         assertFalse(defaults.verboseLogging)
         assertEquals(100, defaults.shellOpacityPercent)
         assertEquals(IslandSettings.DEFAULT_SHELL_COLOR_ARGB, defaults.shellColorArgb)
+    }
+
+    @Test
+    fun silentNotificationOptOutSurvivesCoercion() {
+        val settings = IslandSettings(showSilentNotifications = false).coerced()
+        assertFalse(settings.showSilentNotifications)
+        assertTrue(settings.notificationsEnabled)
     }
 
     @Test

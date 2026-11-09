@@ -6,6 +6,7 @@ import android.app.RemoteInput
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.zenith.nothingisland.data.IslandSettingsRepository
@@ -124,6 +125,28 @@ class IslandService : AccessibilityService(), IslandInteraction {
      */
     fun previewIsland() {
         overlay?.previewIsland()
+    }
+
+    /**
+     * Explicit overlay-only preview. This bypasses the notification listener (which correctly
+     * rejects our own package), posts no system notification, and expires like a real alert.
+     * A visible result proves the overlay path, not notification access or app-specific routing.
+     */
+    fun showTestAlert() {
+        val icon = runCatching { packageManager.getApplicationIcon(applicationInfo) }.getOrNull()
+        IslandStateHolder.postNotification(
+            IslandContent.Notification(
+                key = "nothing-island-test:${SystemClock.elapsedRealtime()}",
+                packageName = packageName,
+                appLabel = "Nothing Island",
+                icon = icon,
+                title = "Test alert",
+                text = "The island is working",
+                actions = emptyList(),
+                contentIntent = null,
+            ),
+        )
+        Log.i(TAG, "test alert posted directly to overlay (listener bypassed)")
     }
 
     /** Called by the notification listener when notification access becomes available. */

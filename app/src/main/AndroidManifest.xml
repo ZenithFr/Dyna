@@ -37,9 +37,13 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
 
-            <meta-data
-                android:name="android.service.notification.default_filter_types"
-                android:value="conversations|alerting" />
+            <!--
+                No default_filter_types metadata: an absent value means "allow all types".
+                Declaring "conversations|alerting" made the OS withhold every SILENT notification
+                (muted chats, gentle notifications) and every ONGOING one (calls, downloads, maps),
+                so WhatsApp/Discord could look completely dead. Filtering is our job, in
+                NotificationGate, where it is configurable and logged.
+            -->
         </service>
 
         <!-- No manifest plug receiver: it cold-started the process only to no-op when the island
