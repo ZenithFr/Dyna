@@ -20,8 +20,9 @@ The logical width lands close to the 393 dp Apple screen class, so the expanded 
 | Downloads / transfers / Live Update-style progress | EXTRA_PROGRESS / ProgressStyle-compatible extras | Implemented |
 | Maps / turn-by-turn | CATEGORY_NAVIGATION + maps package hints | Implemented (generic, no private SDK) |
 | Detached app-icon circle beside the compact shell | Persistent live activity + launcher icon + mitosis spring | Implemented |
+| Alert app icon in the detached bubble, text-only shell | Notification/CallStyle icon + transient content slot | Implemented |
 | Detached minimal *second* activity (two at once) | Needs multi-slot renderer/window policy | Roadmap |
-| Tap opens app / long-press expands | README currently tap-to-expand | Preserved deliberately |
+| Tap opens app / long-press expands | Configurable tap + long-press actions | Implemented (defaults keep tap-to-expand, long-press opens the app) |
 | Landscape / fullscreen hiding | Display metrics + fail-open own-probe status-bar insets | Implemented; no window-content access |
 
 ## Shizuku decision
@@ -41,7 +42,13 @@ be feature-flagged and never required for the core island.
 - Geometry: compact width/height/corner/offsets, hole calibration, expanded max width/corner,
   content margin, lens clearance, island text scale, compact icon size/edge padding, detached
   circle on/off + diameter/gap/icon inset, landscape/fullscreen hiding.
-- Motion: 120 Hz morph hint, opt-in ambient animations + loop rate, motion speed, idle contraction delay, portrait lock.
+- Motion: master animation switch, 120 Hz morph hint, opt-in ambient animations + loop rate, motion
+  speed, idle behaviour + linger, portrait lock.
+- Appearance: shell colour/opacity, primary/secondary text colour, text scale, monochrome icons.
+- Interaction: idle behaviour (hide in lens / keep pill), tap action, long-press action, haptics.
+- Alert content: app icon in the detached bubble, title in the compact pill.
+- Pages: Setup, Appearance, Layout, Camera hole, Notifications & apps, Sources & timer, Behaviour,
+  Motion & battery, Advanced — each with its own reset scope; Advanced adds verbose logging.
 - Colour: shell stroke plus timer/charging/battery-low/power-saver/call answer/decline/download/maps accents.
 
 ## Performance budget (CMF 120 Hz)
@@ -56,6 +63,14 @@ be feature-flagged and never required for the core island.
   package icons are LRU-bounded and listener caches clear on disconnect.
 - Hit targets only at rest; input window removed for non-interactive battery confirmations and suppression.
 - Mitosis reuses shell/circle/neck paths; icon crossfade layers are bounded to the icon box.
+- Idle is a state machine (CONTENT / LINGERING / DORMANT): the linger starts once when content ends,
+  and a dormant island is never re-attached by a refresh, inset dispatch, display callback or settings
+  emission. Only content, the always-visible setting, calibration or an explicit settings edit wakes it.
+- Display callbacks are filtered to state/rotation/size, so the overlay's own frame-rate hint cannot
+  feed back into a relayout loop; app-transition bursts are coalesced.
+- Fullscreen hides are debounced 250 ms so launch animations do not blink the island.
+- Compact media position ticks are deduped: no re-measure, relayout or accessibility event per second.
+- Grant status in the app is read on resume, not polled.
 - No polling: MediaController callbacks, notification listener, sticky battery/power broadcasts.
   No manifest plug receiver cold-wake path. Screen-off/doze detaches all surfaces, stops media/battery
   observers, and reduces a running timer to one completion wake. Idle contraction detaches the settled

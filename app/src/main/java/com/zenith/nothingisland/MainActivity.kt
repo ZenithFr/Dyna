@@ -67,20 +67,26 @@ class MainActivity : ComponentActivity() {
                 var timerPresetMinutes by remember { mutableIntStateOf(DEFAULT_TIMER_MINUTES) }
                 val timer by TimerModule.state.collectAsStateWithLifecycle()
 
-                // Refresh grants on resume and keep the status dot live while visible.
+                fun refreshGrants() {
+                    serviceEnabled = isAccessibilityServiceEnabled()
+                    islandRunning = IslandService.isRunning
+                    notificationListenerEnabled =
+                        ServiceStatus.isNotificationListenerEnabled(this@MainActivity)
+                    batteryOptimizationIgnored =
+                        ServiceStatus.isIgnoringBatteryOptimizations(this@MainActivity)
+                    overlayGranted = ServiceStatus.canDrawOverlays(this@MainActivity)
+                }
+
+                // Event-driven grant status: returning from a system settings screen resumes this
+                // activity, so one read per resume (plus one settle read while the service binds)
+                // replaces the old 1.5 s binder/Settings polling loop that ran the whole time the
+                // app was open.
                 val lifecycleOwner = LocalLifecycleOwner.current
                 LaunchedEffect(lifecycleOwner) {
                     lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                        while (true) {
-                            serviceEnabled = isAccessibilityServiceEnabled()
-                            islandRunning = IslandService.isRunning
-                            notificationListenerEnabled =
-                                ServiceStatus.isNotificationListenerEnabled(this@MainActivity)
-                            batteryOptimizationIgnored =
-                                ServiceStatus.isIgnoringBatteryOptimizations(this@MainActivity)
-                            overlayGranted = ServiceStatus.canDrawOverlays(this@MainActivity)
-                            delay(STATUS_POLL_INTERVAL_MS)
-                        }
+                        refreshGrants()
+                        delay(STATUS_SETTLE_MS)
+                        refreshGrants()
                     }
                 }
 
@@ -113,9 +119,14 @@ class MainActivity : ComponentActivity() {
                     onOpenNotificationListenerSettings = ::openNotificationListenerSettings,
                     onRequestIgnoreBatteryOptimizations = ::requestIgnoreBatteryOptimizations,
                     onOpenOverlaySettings = ::openOverlaySettings,
+                    onRefreshStatus = { refreshGrants() },
                     onSettingsChange = { transform ->
-                        // The service collects the DataStore flow, so this is all that live updates need.
-                        lifecycleScope.launch { repository.update(transform) }
+                        // The service collects the DataStore flow, so this is all that live updates
+                        // need; the preview wake makes an idle island visible while editing.
+                        lifecycleScope.launch {
+                            repository.update(transform)
+                            IslandService.instance?.previewIsland()
+                        }
                     },
                 )
             }
@@ -222,7 +233,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        const val STATUS_POLL_INTERVAL_MS = 1_500L
+        /** One settle re-read after resume: the accessibility service binds asynchronously. */
+        const val STATUS_SETTLE_MS = 750L
         const val DEFAULT_TIMER_MINUTES = 5
         const val HOLE_TAG = "IslandHole"
     }

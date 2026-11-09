@@ -1,5 +1,8 @@
 package com.zenith.nothingisland.overlay
 
+import com.zenith.nothingisland.service.IslandContent
+import com.zenith.nothingisland.service.IslandEvent
+import com.zenith.nothingisland.service.IslandSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -19,9 +22,6 @@ class IslandRenderDemandTest {
             ),
             0f,
         )
-        assertTrue(IslandRenderDemand.shouldDetachIdle(hasContent = false, dormantSettled = true))
-        assertFalse(IslandRenderDemand.shouldDetachIdle(hasContent = true, dormantSettled = true))
-        assertFalse(IslandRenderDemand.shouldDetachIdle(hasContent = false, dormantSettled = false))
     }
 
     @Test
@@ -76,4 +76,42 @@ class IslandRenderDemandTest {
             0f,
         )
     }
+
+    @Test
+    fun compactMediaPositionTicksAreNotRedraws() {
+        val before = IslandEvent(IslandSource.Media, media(positionMs = 1_000L, stamp = 10_000L))
+        val tick = IslandEvent(IslandSource.Media, media(positionMs = 2_000L, stamp = 11_000L))
+        assertTrue(IslandRenderDemand.isMediaPositionTick(before, tick))
+        // The expanded progress row is drawn from the stamp, so it still needs the emission.
+        assertFalse(
+            IslandRenderDemand.isMediaPositionTick(before.copy(expanded = true), tick.copy(expanded = true)),
+        )
+        assertFalse(IslandRenderDemand.isMediaPositionTick(null, tick))
+    }
+
+    @Test
+    fun trackChangesAndPlayStateStillRedraw() {
+        val before = IslandEvent(IslandSource.Media, media(positionMs = 1_000L, stamp = 10_000L))
+        val nextTrack = IslandEvent(
+            IslandSource.Media,
+            media(positionMs = 1_000L, stamp = 10_000L).copy(title = "Another track"),
+        )
+        val paused = IslandEvent(
+            IslandSource.Media,
+            media(positionMs = 1_000L, stamp = 10_000L).copy(isPlaying = false),
+        )
+        assertFalse(IslandRenderDemand.isMediaPositionTick(before, nextTrack))
+        assertFalse(IslandRenderDemand.isMediaPositionTick(before, paused))
+    }
+
+    private fun media(positionMs: Long, stamp: Long) = IslandContent.Media(
+        title = "Track",
+        artist = "Artist",
+        albumArt = null,
+        isPlaying = true,
+        positionMs = positionMs,
+        durationMs = 200_000L,
+        positionUpdatedAtElapsedMs = stamp,
+        speed = 1f,
+    )
 }

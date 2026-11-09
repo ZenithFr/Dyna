@@ -58,6 +58,35 @@ class IslandSettingsTest {
     }
 
     @Test
+    fun batteryFirstAndAlertBubbleDefaultsAreIntentional() {
+        val defaults = IslandSettings()
+        assertEquals(IslandIdleBehaviour.HIDDEN, defaults.idleBehaviour)
+        assertEquals(IslandTapAction.EXPAND, defaults.tapAction)
+        assertEquals(IslandLongPressAction.OPEN_APP, defaults.longPressAction)
+        // The requested alert presentation is on out of the box.
+        assertTrue(defaults.alertIconInBubble)
+        assertTrue(defaults.notificationShowTitle)
+        assertTrue(defaults.motionEnabled)
+        assertTrue(defaults.hapticsEnabled)
+        assertFalse(defaults.monochromeIcons)
+        assertFalse(defaults.verboseLogging)
+        assertEquals(100, defaults.shellOpacityPercent)
+        assertEquals(IslandSettings.DEFAULT_SHELL_COLOR_ARGB, defaults.shellColorArgb)
+    }
+
+    @Test
+    fun shellOpacityIsClamped() {
+        assertEquals(
+            IslandSettings.SHELL_OPACITY_RANGE.first,
+            IslandSettings(shellOpacityPercent = 0).coerced().shellOpacityPercent,
+        )
+        assertEquals(
+            IslandSettings.SHELL_OPACITY_RANGE.last,
+            IslandSettings(shellOpacityPercent = 250).coerced().shellOpacityPercent,
+        )
+    }
+
+    @Test
     fun placementKeepsThePillOnScreen() {
         val settings = IslandSettings(offsetXDp = 24)
         assertEquals(165.5f, settings.pillLeftDp(393f, 110f), 0.01f)

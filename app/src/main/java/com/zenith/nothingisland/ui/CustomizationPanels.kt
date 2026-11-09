@@ -20,7 +20,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.zenith.nothingisland.data.IslandIdleBehaviour
+import com.zenith.nothingisland.data.IslandLongPressAction
 import com.zenith.nothingisland.data.IslandSettings
+import com.zenith.nothingisland.data.IslandTapAction
 import com.zenith.nothingisland.service.notification.PopularIntegrations
 import com.zenith.nothingisland.ui.theme.NothingHairline
 import com.zenith.nothingisland.ui.theme.NothingMuted
@@ -124,6 +127,11 @@ internal fun IntegrationsPanel(settings: IslandSettings, onSettingsChange: Setti
 internal fun MotionPerformancePanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
     PanelColumn {
         ToggleRow(
+            "Animations",
+            "Master switch. Off snaps every morph instantly: the cheapest possible island and the right choice if the phone still runs warm.",
+            settings.motionEnabled,
+        ) { onSettingsChange { s -> s.copy(motionEnabled = it) } }
+        ToggleRow(
             "120 Hz morphs",
             "CMF Phone 2 Pro target: request the panel's high rate for expand/retract, then drop to 0 at rest.",
             settings.highQualityMotion,
@@ -134,7 +142,13 @@ internal fun MotionPerformancePanel(settings: IslandSettings, onSettingsChange: 
             settings.ambientAnimationsEnabled,
         ) { onSettingsChange { s -> s.copy(ambientAnimationsEnabled = it) } }
         Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
-            CalibrationSlider("Ambient loop rate", settings.ambientFrameRateHz, IslandSettings.AMBIENT_FRAME_RATE_RANGE, unit = "Hz") {
+            CalibrationSlider(
+                "Ambient loop rate",
+                settings.ambientFrameRateHz,
+                IslandSettings.AMBIENT_FRAME_RATE_RANGE,
+                enabled = settings.ambientAnimationsEnabled,
+                unit = "Hz",
+            ) {
                 onSettingsChange { s -> s.copy(ambientFrameRateHz = it) }
             }
             CalibrationSlider("Motion speed", settings.motionScalePercent, IslandSettings.MOTION_SCALE_RANGE, unit = "%") {
@@ -151,7 +165,7 @@ internal fun MotionPerformancePanel(settings: IslandSettings, onSettingsChange: 
 }
 
 @Composable
-internal fun ExpandedAppearancePanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+internal fun ExpandedLayoutPanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
     PanelColumn {
         Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
             CalibrationSlider("Expanded max width", settings.expandedMaxWidthDp, IslandSettings.EXPANDED_MAX_WIDTH_RANGE) {
@@ -166,10 +180,13 @@ internal fun ExpandedAppearancePanel(settings: IslandSettings, onSettingsChange:
             CalibrationSlider("Lens clearance", settings.sensorClearanceDp, IslandSettings.SENSOR_CLEARANCE_RANGE) {
                 onSettingsChange { s -> s.copy(sensorClearanceDp = it) }
             }
-            CalibrationSlider("Island text scale", settings.islandTextScalePercent, IslandSettings.ISLAND_TEXT_SCALE_RANGE, unit = "%") {
-                onSettingsChange { s -> s.copy(islandTextScalePercent = it) }
-            }
         }
+    }
+}
+
+@Composable
+internal fun AccentColorsPanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    PanelColumn {
         AccentColorRow("Timer", settings.timerColorArgb, IslandSettings.DEFAULT_TIMER_COLOR_ARGB) { onSettingsChange { s -> s.copy(timerColorArgb = it) } }
         AccentColorRow("Charging", settings.chargingColorArgb, IslandSettings.DEFAULT_CHARGING_COLOR_ARGB) { onSettingsChange { s -> s.copy(chargingColorArgb = it) } }
         AccentColorRow("Battery low", settings.batteryLowColorArgb, IslandSettings.DEFAULT_BATTERY_LOW_COLOR_ARGB) { onSettingsChange { s -> s.copy(batteryLowColorArgb = it) } }
@@ -192,7 +209,7 @@ private fun PanelColumn(content: @Composable ColumnScope.() -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AccentColorRow(label: String, argb: Int, defaultArgb: Int, onChange: (Int) -> Unit) {
+internal fun AccentColorRow(label: String, argb: Int, defaultArgb: Int, onChange: (Int) -> Unit) {
     var draft by remember(argb) { mutableStateOf("%06X".format(argb and 0xFFFFFF)) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -293,6 +310,178 @@ internal fun DetachedIconPanel(settings: IslandSettings, onSettingsChange: Setti
             }
             CalibrationSlider("Icon inset", settings.satelliteIconPaddingDp, IslandSettings.SATELLITE_ICON_PADDING_RANGE) {
                 onSettingsChange { s -> s.copy(satelliteIconPaddingDp = it) }
+            }
+        }
+    }
+}
+
+
+/** Shell colour, opacity and icon treatment. Shape/stroke live in [StrokePanel]. */
+@Composable
+internal fun ShellAppearancePanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    PanelColumn {
+        AccentColorRow("Shell", settings.shellColorArgb, IslandSettings.DEFAULT_SHELL_COLOR_ARGB) {
+            onSettingsChange { s -> s.copy(shellColorArgb = it) }
+        }
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            CalibrationSlider(
+                "Shell opacity",
+                settings.shellOpacityPercent,
+                IslandSettings.SHELL_OPACITY_RANGE,
+                unit = "%",
+            ) { onSettingsChange { s -> s.copy(shellOpacityPercent = it) } }
+            Text(
+                "Pure black is free on this AMOLED panel: pixels stay off. Lighter or translucent shells cost a little more power.",
+                style = MaterialTheme.typography.bodySmall,
+                color = NothingMuted,
+                modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+            )
+        }
+        ToggleRow(
+            "Monochrome icons",
+            "Desaturate app icons inside the island for the dot-matrix look.",
+            settings.monochromeIcons,
+        ) { onSettingsChange { s -> s.copy(monochromeIcons = it) } }
+    }
+}
+
+/** Island typography: colours and scale, independent of the app's Material theme. */
+@Composable
+internal fun TextAppearancePanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    PanelColumn {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            CalibrationSlider(
+                "Island text scale",
+                settings.islandTextScalePercent,
+                IslandSettings.ISLAND_TEXT_SCALE_RANGE,
+                unit = "%",
+            ) { onSettingsChange { s -> s.copy(islandTextScalePercent = it) } }
+        }
+        AccentColorRow("Primary text", settings.textColorArgb, IslandSettings.DEFAULT_TEXT_COLOR_ARGB) {
+            onSettingsChange { s -> s.copy(textColorArgb = it) }
+        }
+        AccentColorRow("Secondary text", settings.secondaryTextColorArgb, IslandSettings.DEFAULT_SECONDARY_TEXT_COLOR_ARGB) {
+            onSettingsChange { s -> s.copy(secondaryTextColorArgb = it) }
+        }
+    }
+}
+
+/** What the island does with nothing to show — the knob behind "it keeps disappearing". */
+@Composable
+internal fun IdlePanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    PanelColumn {
+        ChoiceRow(
+            title = "When idle",
+            description = "Hide curls the shell into the lens and releases the window (lowest battery). " +
+                "Keep pill leaves an empty shell on screen; it is static and still requests no frames.",
+            options = IslandIdleBehaviour.values().toList(),
+            selected = settings.idleBehaviour,
+            label = { if (it == IslandIdleBehaviour.HIDDEN) "Hide in lens" else "Keep pill" },
+        ) { value -> onSettingsChange { s -> s.copy(idleBehaviour = value) } }
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            CalibrationSlider(
+                "Linger before hiding",
+                settings.idleContractDelaySec,
+                IslandSettings.IDLE_CONTRACT_DELAY_RANGE,
+                enabled = settings.idleBehaviour == IslandIdleBehaviour.HIDDEN,
+                unit = "s",
+            ) { onSettingsChange { s -> s.copy(idleContractDelaySec = it) } }
+            Text(
+                "The countdown starts once, when the last activity ends. Opening or closing apps no longer restarts it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = NothingMuted,
+                modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+            )
+        }
+    }
+}
+
+/** Tap, long press and haptics. */
+@Composable
+internal fun InteractionPanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    PanelColumn {
+        ChoiceRow(
+            title = "Tap shell",
+            description = "Expand keeps the documented Android behaviour; Open app jumps straight to the owning app.",
+            options = IslandTapAction.values().toList(),
+            selected = settings.tapAction,
+            label = {
+                when (it) {
+                    IslandTapAction.EXPAND -> "Expand"
+                    IslandTapAction.OPEN_APP -> "Open app"
+                    IslandTapAction.NONE -> "Nothing"
+                }
+            },
+        ) { value -> onSettingsChange { s -> s.copy(tapAction = value) } }
+        ChoiceRow(
+            title = "Long press shell",
+            description = "Apple's second affordance: hold the island to open the app behind the activity.",
+            options = IslandLongPressAction.values().toList(),
+            selected = settings.longPressAction,
+            label = {
+                when (it) {
+                    IslandLongPressAction.OPEN_APP -> "Open app"
+                    IslandLongPressAction.EXPAND -> "Expand"
+                    IslandLongPressAction.NONE -> "Nothing"
+                }
+            },
+        ) { value -> onSettingsChange { s -> s.copy(longPressAction = value) } }
+        ToggleRow(
+            "Haptic feedback",
+            "Short tick when an island control is activated. The system haptic setting still wins.",
+            settings.hapticsEnabled,
+        ) { onSettingsChange { s -> s.copy(hapticsEnabled = it) } }
+    }
+}
+
+/** Where an alert's app icon lives, and what the compact shell shows. */
+@Composable
+internal fun NotificationContentPanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    PanelColumn {
+        ToggleRow(
+            "App icon in detached bubble",
+            "Messages and calls move the app icon into the circle beside the island so the pill shows text only. The bubble retracts as soon as the alert hold expires.",
+            settings.alertIconInBubble,
+        ) { onSettingsChange { s -> s.copy(alertIconInBubble = it) } }
+        ToggleRow(
+            "Show title in pill",
+            "Off leaves the compact shell empty while the bubble carries the app icon.",
+            settings.notificationShowTitle,
+        ) { onSettingsChange { s -> s.copy(notificationShowTitle = it) } }
+    }
+}
+
+/**
+ * Single-choice row backed by chips. Kept generic so every enum knob (idle behaviour, tap actions,
+ * hole mode) reads and behaves the same way, with 48 dp targets and selected semantics.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun <T> ChoiceRow(
+    title: String,
+    description: String,
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp)) {
+        Text(title.uppercase(), style = MaterialTheme.typography.labelSmall, color = NothingMuted)
+        Spacer(Modifier.height(6.dp))
+        Text(description, style = MaterialTheme.typography.bodySmall, color = NothingMuted)
+        Spacer(Modifier.height(10.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            options.forEach { option ->
+                val isSelected = option == selected
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { onSelect(option) },
+                    label = { Text(label(option), style = MaterialTheme.typography.labelMedium) },
+                    modifier = Modifier.defaultMinSize(minHeight = 48.dp).semantics { this.selected = isSelected },
+                )
             }
         }
     }

@@ -4,7 +4,7 @@ An open-source **Dynamic Island overlay for Nothing OS**, built with Kotlin + Je
 It draws a black pill at the top of the screen using a classic `AccessibilityService` overlay
 window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
 
-> Status: **v0.4.0+**. The island shell, onboarding and calibration work, it reacts to media
+> Status: **v0.5.0+**. The island shell, onboarding and calibration work, it reacts to media
 > sessions, notifications, calls, charging/battery/power-save, downloads and maps navigation,
 > ships a full countdown timer, and places itself around
 > the physical camera punch-hole with three calibration modes and two shell shapes (pill / notch).
@@ -23,7 +23,10 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   `MediaController.Callback` (no polling). Artwork is downscaled and sampled for accent color only
   when its identity changes. The original full-size bitmap is not strongly retained; only the
   bounded thumbnail is kept, and decorative playing bars are opt-in.
-- **Notifications**: an alerting notification shows the app icon + title for 4 s; tap to expand
+- **Notifications**: an alerting notification shows the app icon **in the detached bubble** and the
+  title in the shell for 4 s (both configurable; the icon can be moved back into the pill). The bubble
+  retracts on the same mitosis spring the moment the hold expires, so nothing is left beside the lens.
+  Tap to expand
   for title, text and up to two actions below the lens (inline reply included). Private/secret
   notifications are redacted or skipped while the keyguard is locked. Filtering skips ongoing,
   group-summary, low-importance, media/call and own-package notifications, and anything while
@@ -53,7 +56,10 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   `TIME'S UP` / `00:00` for 4 s before clearing. Notifications and charging still layer above it
   and hand it back when they expire.
 - **Detached app icon**: a persistent live activity — music, timer, maps or downloads — keeps the
-  island compact and moves the owning app's icon into its own circle a gap to the right. Detach and
+  island compact and moves the owning app's icon into its own circle a gap to the right. Notification
+  and call alerts use the same bubble under their own switch (**App icon in detached bubble**): while
+  the bubble carries the icon, the compact shell draws text only, never a duplicate icon. Album art and
+  the timer glyph are content rather than app identity, so they always stay in the shell. Detach and
   re-attach are a mitosis-style motion: the daughter circle grows from the trailing shell edge, a
   Bézier neck thins and pinches off, and the same spring reverses the union on expand/retract. The
   circle is part of the island for touches, its surface space is reserved so an activity starting or
@@ -85,31 +91,45 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   (playing bars / indeterminate progress) are **off by default**; when enabled they use a separate
   30 Hz default rate and never run while dormant, hidden, or screen-off.
 - **Idle contraction**: with nothing to show — no notification, media, timer or charging — the
-  shell curls up into the camera-hole circle after a **1 s** delay (configurable 1–10 s in the
-  calibration panel). Pausing a track or letting an alert expire hands the island back to idle, so
+  shell curls up into the camera-hole circle after a **1 s** delay (configurable 1–10 s in
+  **Behaviour → When idle**). The countdown starts **once**, when the last activity ends: opening or
+  closing apps, inset changes, refresh-rate changes and settings emissions can no longer restart it
+  or resurrect a retired island. **When idle → Keep pill** is the alternative for users who want an
+  always-visible empty shell (static, still zero frames at rest). Pausing a track or letting an alert expire hands the island back to idle, so
   it disappears into the lens instead of lingering; new activity cancels the countdown and springs
   the shell back out. The curl is a ~420 ms spring on the same 120 Hz motion path as the expand /
   retract morph, not a one-frame pop. It is staged rather
   than uniform: over half of the width is gone before the height moves at all, then the height
   flattens while the rest of the width closes, so the shell slides up into the lens instead of
   shrinking around its own centre. Once the curl settles, the island surface is detached entirely
-  instead of leaving a transparent window/buffer behind the lens; new activity re-attaches it.
+  instead of leaving a transparent window/buffer behind the lens. Only real content, the always-visible
+  setting, lens calibration, or an actual settings edit (one preview linger) may re-attach it.
 - **Display behaviour**: **Hide in landscape** and **Hide in fullscreen** default on. Suppression
   removes the island, touch shield and inline reply and stops overlay frame work; landscape/fullscreen
   keep the invisible 1 px inset probe and snap the current activity back when allowed. Screen-off/doze/AOD
   is stricter: every island/probe/touch surface is detached, media/battery observers stop, and the timer
   keeps only its end timestamp plus one completion wake. Fullscreen is detected from status-bar
-  inset visibility through a 1 px non-touchable probe, not window content. The probe fails open:
+  inset visibility through a 1 px non-touchable probe, not window content. A fullscreen hide must stay
+  stable for 250 ms before it is committed, because app launches briefly report the status bar hidden
+  during their window animation — that transient reading used to blink the island on every app switch.
+  Display callbacks are filtered to state/rotation/size changes, so the overlay's own 120 Hz hint can no
+  longer feed back into a relayout loop. The probe fails open:
   until it has observed a visible status bar, a hidden reading is treated as unknown and cannot hide
   the island. **Portrait lock** only
   applies when landscape hiding is off: it keeps the portrait size/top-centre anchor instead of
   re-anchoring to the rotated cutout. The settings app itself remains portrait.
-- **Customization**: every source can be switched off; alert holds, battery threshold, lockscreen
-  redaction and call auto-expand are configurable; expanded width/corner/margins/lens clearance/text
-  scale are sliders; motion has a 120 Hz morph hint, opt-in ambient loops with a separate rate, and speed scale;
-  each source accent has swatches + hex entry. Popular apps can be opted out per package.
-- Onboarding checklist with live grant status for the accessibility service, notification
-  listener, battery optimisation and overlay permission. Settings controls use Material 3 with
+- **Customization**: the app is a hub with **one page per category** — Setup, Appearance, Layout,
+  Camera hole, Notifications & apps, Sources & timer, Behaviour, Motion & battery, Advanced — each with
+  its own *restore defaults* scope (system back returns to the hub). Every source can be switched off;
+  alert holds, battery threshold, lockscreen redaction and call auto-expand are configurable; shell
+  colour + opacity, primary/secondary text colour, text scale and monochrome icons are exposed; compact
+  and expanded geometry, detached-bubble diameter/gap/inset and lens clearance are sliders; idle
+  behaviour, linger, tap action, long-press action and haptics are selectable; motion has a master
+  switch, a 120 Hz morph hint, opt-in ambient loops with a separate rate and a speed scale; each source
+  accent has swatches + hex entry. Popular apps can be opted out per package.
+- Setup page with live grant status for the accessibility service, notification listener, battery
+  optimisation and overlay permission, plus a diagnostics card and an explicit re-check action. Grant
+  status is read on resume (event-driven) instead of a 1.5 s polling loop. Settings controls use Material 3 with
   48 dp touch targets, wrapping chip rows and whole-row switches; the canvas island exposes its
   rest-state controls to TalkBack as virtual buttons.
 - Calibration sliders persisted with **DataStore Preferences**: horizontal/vertical offset,
@@ -268,7 +288,19 @@ clamped to safe ranges:
 | Guide on screen | on/off | off |
 | Island shape | Pill / Notch | Pill |
 | Idle contraction delay | 1 … 10 s | 1 s |
+| Animations (master) | on/off | on |
 | Motion at 120 Hz | on/off (Android 15+ hint) | on |
+| When idle | Hide in lens / Keep pill | Hide in lens |
+| Tap shell | Expand / Open app / Nothing | Expand |
+| Long press shell | Open app / Expand / Nothing | Open app |
+| Haptic feedback | on/off | on |
+| Shell colour | RRGGBB / swatches | black |
+| Shell opacity | 40 … 100 % | 100 % |
+| Primary / secondary text | RRGGBB / swatches | white / 67 % white |
+| Monochrome icons | on/off | off |
+| App icon in detached bubble | on/off (notifications + calls) | on |
+| Show title in pill | on/off | on |
+| Verbose logging | on/off | off |
 | Ambient animations | on/off (visible decorative loops only) | off |
 | Ambient loop rate | 30 … 120 Hz | 30 Hz |
 | Outline | on/off | on |
@@ -346,12 +378,15 @@ adb logcat -s IslandOverlay IslandVisibility IslandService IslandMedia IslandNot
 app/src/main/java/com/zenith/nothingisland/
 ├── MainActivity.kt                       # Compose host, intents, grant polling
 ├── data/IslandSettings.kt                # settings model + DataStore repository
+├── data/IslandOptions.kt                 # idle/tap enums + per-category reset scopes
 ├── data/HoleGeometry.kt                  # hole model, mode placement, island shape paths
 ├── overlay/IslandOverlay.kt              # window, hole-aware geometry, suppression, a11y nodes
 ├── overlay/IslandVisibility.kt           # landscape/fullscreen policy + privacy-safe inset probe
 ├── overlay/IslandLayout.kt               # Apple-style compact/expanded layout rules
 ├── overlay/IslandMotion.kt               # frame-rate-independent spring/easing math
-├── overlay/IslandRenderDemand.kt         # pure idle/ambient/frame-rate demand rules
+├── overlay/IslandRenderDemand.kt         # pure frame-demand + media-tick dedupe rules
+├── overlay/IslandIdlePolicy.kt           # CONTENT/LINGERING/DORMANT idle lifecycle
+├── overlay/IslandIconPlacement.kt        # which icon the detached bubble takes
 ├── overlay/IslandPillView.kt             # canvas renderer, hole avoidance, gesture targets
 ├── overlay/IslandInteraction.kt          # tap callbacks / transport commands
 ├── overlay/IslandReplyWindow.kt          # focusable inline-reply overlay
@@ -362,7 +397,8 @@ app/src/main/java/com/zenith/nothingisland/
 ├── service/notification/                 # listener + filtering/parsing
 ├── service/charging/                     # dynamic power-save + sticky battery receiver
 ├── service/timer/TimerModule.kt          # countdown controller (tick, pause/resume/stop)
-├── ui/HomeScreen.kt                      # onboarding + timer + calibration UI
+├── ui/HomeScreen.kt                      # hub + page host + shared panels
+├── ui/SettingsPages.kt                   # one page per settings category
 ├── ui/theme/                             # black/white/red Nothing palette
 ├── util/ServiceStatus.kt                 # grant checks
 app/src/test/java/com/zenith/nothingisland/ # local layout/motion/state regression tests

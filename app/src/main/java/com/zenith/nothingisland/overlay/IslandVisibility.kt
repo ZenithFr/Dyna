@@ -19,6 +19,19 @@ enum class IslandSuppression { NONE, SCREEN_OFF, LANDSCAPE, FULLSCREEN }
  * and screen-off must not keep overlay surfaces or animation loops alive.
  */
 object IslandVisibilityPolicy {
+
+    /**
+     * App launches, recents and dialog transitions briefly report the status bar as hidden while the
+     * window animation runs. Hiding on that first reading made the island blink on every app switch,
+     * so a fullscreen hide must be stable for this long before it is committed. Showing the island
+     * again is never delayed.
+     */
+    const val FULLSCREEN_HIDE_DEBOUNCE_MS = 250L
+
+    /** Only the "status bar just disappeared" edge is debounced; screen-off/landscape hide at once. */
+    fun shouldDebounceSuppression(current: IslandSuppression, next: IslandSuppression): Boolean =
+        current == IslandSuppression.NONE && next == IslandSuppression.FULLSCREEN
+
     fun resolve(
         hideInLandscape: Boolean,
         hideInFullscreen: Boolean,
