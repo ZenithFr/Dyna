@@ -24,10 +24,14 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   when its identity changes. The original full-size bitmap is not strongly retained; only the
   bounded thumbnail is kept, and decorative playing bars are opt-in.
 - **Notifications**: a message alert shows the app icon **in the detached bubble** and the
-  title in the shell for 4 s (both configurable; the icon can be moved back into the pill). The bubble
-  retracts on the same mitosis spring the moment the hold expires, so nothing is left beside the lens.
-  Tap to expand
-  for title, text and up to two actions below the lens (inline reply included). Private/secret
+  title in the shell. The bubble holds for 3 s by default (**Layout → Detached bubble → Bubble hold**, 1–10 s);
+  the shell hold is 4 s. Both can be changed, and the icon can be moved back into the pill. Each alert's
+  bubble retracts on the same mitosis spring when its hold expires, so nothing is left beside the lens.
+  When several notifications are queued, the island rotates through all of them, from different apps
+  too, until the last one is dismissed. The detached icon carries an **unread count badge** that matches
+  the number of active notifications in the OS shade (seeded from the shade when the listener connects).
+  Tap to expand for title, text and up to two actions below the lens (inline reply included). The
+  compact pill never shows a percentage on a message. Private/secret
   notifications are redacted or skipped while the keyguard is locked. Silent/gentle notifications
   (Android importance LOW), including some muted chats, are shown by default; **Notifications & apps →
   Silent notifications** turns them off. IMPORTANCE_MIN/NONE, generic ongoing services, group summaries,
@@ -45,12 +49,18 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   configurable low-battery threshold shows a low card; power-save mode changes show a saver card.
   Driven by public power/battery broadcasts + sticky battery intent — no polling and no manifest
   plug receiver that cold-wakes the process while the island is disabled.
-- **Downloads / Live Update-style progress**: progress notifications (including Android 15
-  `ProgressStyle`-compatible `android.progress*` extras) become a persistent download card with
-  percent/indeterminate progress, open and cancel actions.
+- **Downloads / Live Update-style progress**: ongoing progress notifications (including Android 15
+  `ProgressStyle`-compatible `android.progress*` extras) become a persistent activity card. The card
+  shows the app's own notification action buttons (up to two) plus Open. It has no percentage and no
+  progress bar, and no separate cancel control. Ordinary notifications that merely carry progress
+  extras are routed as messages, not as downloads.
 - **Maps / navigation**: navigation-category notifications and known maps packages become a
   turn-by-turn card with an open-maps action. This is a public-notification integration, not a
   private Google Maps/Waze SDK hook.
+- **Clock**: ongoing timers from the Google Clock (`com.google.android.deskclock`) or AOSP Clock
+  (`com.android.deskclock`) apps are shown as a persistent activity card with the Clock's own actions.
+  Alarms stay ordinary alerts. Controlled by **Sources & timer → Clock** (on by default). Package
+  names are not yet verified on hardware.
 - **Timer**: a persistent countdown that outranks maps/downloads/media on the base layer; calls
   sit above all alerts. Start 1/5/10/25
   minute presets from the app; the compact pill shows an orange timer/pause glyph + `mm:ss`.
@@ -315,6 +325,8 @@ clamped to safe ranges:
 | Primary / secondary text | RRGGBB / swatches | white / 67 % white |
 | Monochrome icons | on/off | off |
 | App icon in detached bubble | on/off (notifications + calls) | on |
+| Bubble hold | 1 … 10 s | 3 s |
+| Clock (Google / AOSP) timers | on/off | on |
 | Show title in pill | on/off | on |
 | Silent notifications | on/off | on |
 | Verbose logging | on/off | off |
@@ -376,8 +388,13 @@ adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the 
 # 3c. Send real WhatsApp/Discord messages, including a Silent/gentle channel; see procedure G in
 #     docs/DEVICE_VERIFICATION.md. Expected: show pkg=com.whatsapp/com.discord source=Notification.
 
+# 3c. Multi-alert: post two notifications from different apps. Expect the detached icon to show an
+#     unread count of 2 (matching the shade), the island to rotate between them, and the badge to fall
+#     as each is dismissed. Each bubble holds 3 s by default. There must be no percentage on any card.
 # 4. Charging: plug/unplug. Expect a 4s bolt + percentage card; at 100% it reads FULL.
 
+# 5a. Clock: start a timer in the Google or AOSP Clock app. Expect an activity card with the Clock's
+#     actions and no progress bar. Turn Clock off in Sources & timer and it must not appear.
 # 5. Timer: open the app, pick a preset (1/5/10/25 min) and press START.
 #    Compact pill shows timer/pause glyph + mm:ss; tap for circular pause/resume + cancel and big time.
 #    Pause holds the remaining time; resume continues. Let it finish: TIME'S UP / 00:00 for ~4s,
@@ -430,7 +447,7 @@ app/src/main/java/com/zenith/nothingisland/
 ├── overlay/IslandReplyWindow.kt          # focusable inline-reply overlay
 ├── service/IslandService.kt              # AccessibilityService, renders the holder
 ├── service/IslandContent.kt              # event/content models + source priority
-├── service/IslandStateHolder.kt          # single source of truth, persistent base + 4 s alerts
+├── service/IslandStateHolder.kt          # single source of truth, persistent base + alert queue/rotation
 ├── service/media/MediaSource.kt          # active MediaSession → island
 ├── service/notification/                 # listener + filtering/parsing
 ├── service/charging/                     # dynamic power-save + sticky battery receiver

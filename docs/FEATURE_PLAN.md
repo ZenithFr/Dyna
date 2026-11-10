@@ -21,6 +21,9 @@ The logical width lands close to the 393 dp Apple screen class, so the expanded 
 | Maps / turn-by-turn | CATEGORY_NAVIGATION + maps package hints | Implemented (generic, no private SDK) |
 | Detached app-icon circle beside the compact shell | Persistent live activity + launcher icon + mitosis spring | Implemented |
 | Alert app icon in the detached bubble, text-only shell | Notification/CallStyle icon + transient content slot | Implemented |
+| Multiple alerts: rotation across apps + unread count on the bubble | Alert queue synced with OS shade count | Implemented (source-tested; device pending) |
+| Clock app timers (Google / AOSP) | Ongoing deskclock notifications → activity card | Implemented (package names unverified on device) |
+| Notification action controls instead of a progress bar | Activity cards show notification actions + Open | Implemented |
 | Detached minimal *second* activity (two at once) | Needs multi-slot renderer/window policy | Roadmap |
 | Tap opens app / long-press expands | Configurable tap + long-press actions | Implemented (defaults keep tap-to-expand, long-press opens the app) |
 | Landscape / fullscreen hiding | Display metrics + fail-open own-probe status-bar insets | Implemented; no window-content access |
@@ -36,7 +39,8 @@ be feature-flagged and never required for the core island.
 
 - Source switches: media, notifications, calls, charging, battery low, power saver, downloads, maps.
 - Alert holds: notification / charging / battery; battery-low threshold; lockscreen redaction;
-  auto-expand calls.
+  auto-expand calls; detached bubble hold (1–10 s, default 3 s).
+- Sources: Clock timers (Google and AOSP), on by default.
 - Per-app opt-outs for WhatsApp, Instagram, Snapchat, Telegram, Messenger, Discord, Spotify,
   YouTube Music, Google Maps, Waze, Nothing Camera, Chrome, Play Store, system downloads.
 - Geometry: compact width/height/corner/offsets, hole calibration, expanded max width/corner,
@@ -47,7 +51,9 @@ be feature-flagged and never required for the core island.
 - Appearance: shell colour/opacity, primary/secondary text colour, text scale, monochrome icons.
 - Interaction: idle behaviour (hide in lens / keep pill), tap action, long-press action, haptics.
 - Alert content: app icon in the detached bubble, title in the compact pill, silent/gentle alerts
-  (on by default; importance MIN/NONE still ignored).
+  (on by default; importance MIN/NONE still ignored). Queued alerts rotate across apps, and the
+  bubble shows an unread count synced with the shade. Progress cards have no percentage; they show
+  notification actions instead.
 - Pages: Setup, Appearance, Layout, Camera hole, Notifications & apps, Sources & timer, Behaviour,
   Motion & battery, Advanced — each with its own reset scope; Advanced adds verbose logging.
 - Delivery diagnostics: separate access grant from live listener connection; overlay-only test alert;
@@ -98,6 +104,8 @@ adb shell settings put system animator_duration_scale 0   # restore afterwards
 ```
 
 ## Next backlog
+
+0. Verify the Clock package names and the rotation/badge behaviour on the CMF Phone 2 Pro (DEVICE_VERIFICATION §H).
 
 1. Detached minimal bubble for a *second* simultaneous activity (timer + media). The
    single-activity app-icon bubble already shipped on `master` and is reconciled here.

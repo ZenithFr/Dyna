@@ -17,6 +17,7 @@ enum class NotificationDrop {
     NOTIFICATIONS_OFF,
     DOWNLOADS_OFF,
     NAVIGATION_OFF,
+    CLOCK_OFF,
     // Delivery/deduplication reasons emitted outside the gate.
     OVERLAY_STOPPED,
     UNCHANGED,
@@ -56,6 +57,9 @@ object NotificationGate {
     const val CATEGORY_CALL = "call"
     const val CATEGORY_SERVICE = "service"
     const val CATEGORY_NAVIGATION = "navigation"
+    const val CATEGORY_PROGRESS = "progress"
+    const val CATEGORY_ALARM = "alarm"
+    const val CATEGORY_MESSAGE = "msg"
 
     @Suppress("LongParameterList")
     fun decide(
@@ -75,6 +79,8 @@ object NotificationGate {
         downloadsEnabled: Boolean,
         navigationEnabled: Boolean,
         showSilentNotifications: Boolean,
+        isClockApp: Boolean,
+        clockEnabled: Boolean,
     ): NotificationDecision {
         if (packageName == ownPackageName) return NotificationDecision.drop(NotificationDrop.OWN_PACKAGE)
         if (packageName in disabledPackages) return NotificationDecision.drop(NotificationDrop.DISABLED_PACKAGE)
@@ -93,12 +99,19 @@ object NotificationGate {
             else NotificationDecision.drop(NotificationDrop.CALLS_OFF)
         }
         if (isMedia) return NotificationDecision.drop(NotificationDrop.MEDIA)
+        // A running clock timer or stopwatch is an ongoing activity; a ringing alarm is a plain alert.
+        if (isClockApp && isOngoing) {
+            return if (clockEnabled) NotificationDecision.show(IslandSource.Download)
+            else NotificationDecision.drop(NotificationDrop.CLOCK_OFF)
+        }
         if (category == CATEGORY_SERVICE) return NotificationDecision.drop(NotificationDrop.SERVICE)
         if (category == CATEGORY_NAVIGATION || (isOngoing && packageName in PopularIntegrations.mapsPackages)) {
             return if (navigationEnabled) NotificationDecision.show(IslandSource.Navigation)
             else NotificationDecision.drop(NotificationDrop.NAVIGATION_OFF)
         }
-        if (hasProgress) {
+        // Determinate/indeterminate progress only counts as an activity while it is ongoing. A chat
+        // message that happens to carry progress extras is an ordinary alert with no percentage.
+        if (hasProgress && (isOngoing || category == CATEGORY_PROGRESS)) {
             return if (downloadsEnabled) NotificationDecision.show(IslandSource.Download)
             else NotificationDecision.drop(NotificationDrop.DOWNLOADS_OFF)
         }

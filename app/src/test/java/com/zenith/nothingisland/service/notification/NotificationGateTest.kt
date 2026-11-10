@@ -28,6 +28,8 @@ class NotificationGateTest {
         downloadsEnabled: Boolean = true,
         navigationEnabled: Boolean = true,
         showSilentNotifications: Boolean = true,
+        isClockApp: Boolean = false,
+        clockEnabled: Boolean = true,
     ) = NotificationGate.decide(
         packageName = packageName,
         ownPackageName = ownPackageName,
@@ -45,6 +47,8 @@ class NotificationGateTest {
         downloadsEnabled = downloadsEnabled,
         navigationEnabled = navigationEnabled,
         showSilentNotifications = showSilentNotifications,
+        isClockApp = isClockApp,
+        clockEnabled = clockEnabled,
     )
 
     private fun assertShown(expected: IslandSource, decision: NotificationDecision) {
@@ -158,6 +162,51 @@ class NotificationGateTest {
     }
 
     @Test
+    fun chatMessageWithProgressExtrasIsAnOrdinaryAlertWithoutAPercentage() {
+        // Many apps attach progress extras to ordinary messages. That used to become a "%" card.
+        assertShown(
+            IslandSource.Notification,
+            decide(hasProgress = true, isOngoing = false, category = NotificationGate.CATEGORY_MESSAGE),
+        )
+        assertShown(
+            IslandSource.Notification,
+            decide(packageName = "com.discord", hasProgress = true, isOngoing = false, category = null),
+        )
+    }
+
+    @Test
+    fun clockTimersAndStopwatchAreActivitiesThatCanBeTurnedOff() {
+        val clock = "com.google.android.deskclock"
+        assertShown(
+            IslandSource.Download,
+            decide(packageName = clock, category = null, isOngoing = true, isClockApp = true),
+        )
+        assertDropped(
+            NotificationDrop.CLOCK_OFF,
+            decide(
+                packageName = clock,
+                category = null,
+                isOngoing = true,
+                isClockApp = true,
+                clockEnabled = false,
+            ),
+        )
+    }
+
+    @Test
+    fun ringingAlarmIsAnAlertNotAnOngoingActivity() {
+        assertShown(
+            IslandSource.Notification,
+            decide(
+                packageName = "com.android.deskclock",
+                category = NotificationGate.CATEGORY_ALARM,
+                isOngoing = false,
+                isClockApp = true,
+            ),
+        )
+    }
+
+    @Test
     fun navigationCategoryAndOngoingMapsHintBothRouteToNavigation() {
         assertShown(
             IslandSource.Navigation,
@@ -184,7 +233,10 @@ class NotificationGateTest {
             IslandSource.Call,
             decide(notificationsEnabled = false, category = NotificationGate.CATEGORY_CALL),
         )
-        assertShown(IslandSource.Download, decide(notificationsEnabled = false, hasProgress = true))
+        assertShown(
+            IslandSource.Download,
+            decide(notificationsEnabled = false, hasProgress = true, isOngoing = true),
+        )
         assertShown(
             IslandSource.Navigation,
             decide(notificationsEnabled = false, category = NotificationGate.CATEGORY_NAVIGATION),

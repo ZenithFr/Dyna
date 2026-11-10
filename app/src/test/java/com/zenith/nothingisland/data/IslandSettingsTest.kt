@@ -95,6 +95,14 @@ class IslandSettingsTest {
     }
 
     @Test
+    fun bubbleHoldDefaultsToThreeSecondsAndIsClamped() {
+        assertEquals(3, IslandSettings().bubbleDurationSec)
+        assertEquals(1, IslandSettings(bubbleDurationSec = 0).coerced().bubbleDurationSec)
+        assertEquals(10, IslandSettings(bubbleDurationSec = 99).coerced().bubbleDurationSec)
+        assertTrue(IslandSettings().clockEnabled)
+    }
+
+    @Test
     fun placementKeepsThePillOnScreen() {
         val settings = IslandSettings(offsetXDp = 24)
         assertEquals(165.5f, settings.pillLeftDp(393f, 110f), 0.01f)

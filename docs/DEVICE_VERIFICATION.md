@@ -32,7 +32,7 @@ the island when an immersive app releases the status bar. It draws nothing and r
    (`1 starts`, ~2.6 s foreground). It is not an idle soak and cannot show drain per hour.
 3. **Frame rate / frame cost.** No `gfxinfo framestats` or SurfaceFlinger latency capture yet, so the
    "120 Hz only while morphing, 0 at rest" claim is still source-level.
-4. **Alert icon in the detached bubble** and its retraction when the 4 s hold expires — not observed.
+4. **Alert icon in the detached bubble** and its retraction when the hold expires — not observed.
 5. **RAM retention** across media track swaps — no `meminfo` capture.
 
 ---
@@ -48,7 +48,7 @@ switch and allocate nothing while it is off.
 adb logcat -c
 adb logcat -s IslandOverlay &
 
-# Post an alert so the island attaches, then let the 4 s hold + linger expire.
+# Post an alert so the island attaches, then let the hold + linger expire.
 adb shell cmd notification post -S bigtext -t "Flicker test" ni_flicker "Watch the island retire."
 sleep 8
 
@@ -113,7 +113,9 @@ adb shell cmd notification post -S bigtext -t "Bubble test" ni_bubble "Icon shou
 ```
 
 Expected on screen: app icon in the detached circle, **text only** inside the pill, and the circle
-retracting into the shell when the hold expires. Toggle **Notifications & apps → App icon in detached
+retracting into the shell when the hold expires (3 s by default; change **Layout → Detached bubble → Bubble
+hold** to check 1–10 s). Toggle **Notifications & apps → App icon in detached bubble** off to see the
+icon return to the pill. Toggle **Notifications & apps → App icon in detached
 bubble** off to see the icon return to the pill.
 
 ### F. RAM
@@ -195,5 +197,27 @@ Drop reasons and the next check:
 Logs contain package names and routing facts, not titles, bodies, custom category text or notification
 keys. Unrecognized categories appear as `other`. Turn verbose logging off after capture. Record the build commit, grant/connection rows, normal/silent results and
 relevant log lines here only after running them on the phone.
+
+---
+
+### H. Multi-alert rotation, unread badge, Clock timers, notification controls
+
+Not yet run on a device. Source tests only (`IslandStateHolderTest`, `NotificationGateTest`,
+`AlertStackTest`).
+
+1. Post two messages from different apps (for example two `adb shell cmd notification post` calls
+   with different tags). Expected: the island rotates between the two, and the detached icon shows an
+   unread badge of `2`. Dismiss one from the shade: the badge falls to `1`. Dismiss the last: the
+   island returns to its base layer and the badge clears.
+2. No card may show a percentage. A message with `EXTRA_PROGRESS` and no ongoing flag must render as a
+   message, not a progress card.
+3. Start a timer in the Google Clock app (`com.google.android.deskclock`) or AOSP Clock
+   (`com.android.deskclock`). Expected: an activity card with the Clock's own actions and no progress
+   bar. Record the real package name seen in logcat (`IslandNotificationListener`, verbose logging).
+   Turn **Sources & timer → Clock** off and confirm the card no longer appears.
+4. Post a progress notification that has notification actions. Expected: those buttons plus Open, and
+   no progress bar or cancel control.
+
+Record the build commit and the results here only after running them on the phone.
 
 ---

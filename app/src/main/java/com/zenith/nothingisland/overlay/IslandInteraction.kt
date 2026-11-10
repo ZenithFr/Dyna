@@ -19,5 +19,4 @@ interface IslandInteraction {
     fun onCallDecline()
     fun onCallEnd()
     fun onOpenContent()
-    fun onCancelDownload()
 }

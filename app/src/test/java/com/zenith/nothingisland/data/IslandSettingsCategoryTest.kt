@@ -103,6 +103,15 @@ class IslandSettingsCategoryTest {
     }
 
     @Test
+    fun bubbleHoldBelongsToNotificationsAndClockToSources() {
+        val tuned = IslandSettings(bubbleDurationSec = 7, clockEnabled = false)
+        assertEquals(3, tuned.resetCategory(IslandSettingsCategory.NOTIFICATIONS).bubbleDurationSec)
+        assertEquals(false, tuned.resetCategory(IslandSettingsCategory.APPEARANCE).clockEnabled)
+        assertTrue(tuned.resetCategory(IslandSettingsCategory.SOURCES).clockEnabled)
+        assertEquals(7, tuned.resetCategory(IslandSettingsCategory.SOURCES).bubbleDurationSec)
+    }
+
+    @Test
     fun resettingEveryCategoryRestoresDefaults() {
         val reset = IslandSettingsCategory.values().fold(customized) { acc, category ->
             acc.resetCategory(category)

@@ -27,6 +27,8 @@ class IslandNotificationListener : NotificationListenerService() {
     private var source: NotificationSource? = null
     private var settingsJob: Job? = null
     private var verboseLogging = false
+    /** Seed the count from the shade once, after the first settings snapshot has been applied. */
+    private var seedPending = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val notifications: NotificationSource
@@ -43,10 +45,18 @@ class IslandNotificationListener : NotificationListenerService() {
         // collector first; otherwise every reconnect leaks another DataStore subscription.
         settingsJob?.cancel()
         source?.clear()
+        seedPending = true
         settingsJob = scope.launch {
             IslandSettingsRepository.get(this@IslandNotificationListener).settings.collect { snapshot ->
                 verboseLogging = snapshot.verboseLogging
                 notifications.updateSettings(snapshot)
+                if (seedPending) {
+                    seedPending = false
+                    // Alerts already in the shade feed the badge count, silently, so it matches the OS.
+                    guardNotifications(TAG) {
+                        notifications.seed(activeNotifications?.toList().orEmpty(), currentRanking)
+                    }
+                }
             }
         }
     }
@@ -72,6 +82,7 @@ class IslandNotificationListener : NotificationListenerService() {
     override fun onListenerDisconnected() {
         if (connectedInstance === this) connectedInstance = null
         Log.i(TAG, "listener disconnected")
+        seedPending = false
         settingsJob?.cancel()
         settingsJob = null
         source?.clear()

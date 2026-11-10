@@ -54,12 +54,19 @@ internal fun SourcesPanel(settings: IslandSettings, onSettingsChange: SettingsCh
         ToggleRow("Power saving mode", "Alert when system power saver changes.", settings.powerSaveEnabled) {
             onSettingsChange { s -> s.copy(powerSaveEnabled = it) }
         }
-        ToggleRow("Downloads & transfers", "Progress notifications, installs and Live Update-style progress.", settings.downloadsEnabled) {
-            onSettingsChange { s -> s.copy(downloadsEnabled = it) }
-        }
+        ToggleRow(
+            "Downloads & transfers",
+            "Ongoing downloads and installs stay visible with the notification's own buttons. No progress bar or percentage.",
+            settings.downloadsEnabled,
+        ) { onSettingsChange { s -> s.copy(downloadsEnabled = it) } }
         ToggleRow("Maps & navigation", "Turn-by-turn status from maps notifications.", settings.navigationEnabled) {
             onSettingsChange { s -> s.copy(navigationEnabled = it) }
         }
+        ToggleRow(
+            "Clock",
+            "Google Clock and the stock Clock: running timers and stopwatch show their Pause/Stop controls. Alarms appear as alerts with Snooze/Stop.",
+            settings.clockEnabled,
+        ) { onSettingsChange { s -> s.copy(clockEnabled = it) } }
     }
 }
 
@@ -69,6 +76,9 @@ internal fun AlertsPrivacyPanel(settings: IslandSettings, onSettingsChange: Sett
         Column(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
             CalibrationSlider("Notification hold", settings.notificationDurationSec, IslandSettings.ALERT_DURATION_RANGE, unit = "s") {
                 onSettingsChange { s -> s.copy(notificationDurationSec = it) }
+            }
+            CalibrationSlider("Bubble hold", settings.bubbleDurationSec, IslandSettings.BUBBLE_DURATION_RANGE, unit = "s") {
+                onSettingsChange { s -> s.copy(bubbleDurationSec = it) }
             }
             CalibrationSlider("Charging hold", settings.chargingDurationSec, IslandSettings.ALERT_DURATION_RANGE, unit = "s") {
                 onSettingsChange { s -> s.copy(chargingDurationSec = it) }
@@ -440,7 +450,7 @@ internal fun NotificationContentPanel(settings: IslandSettings, onSettingsChange
     PanelColumn {
         ToggleRow(
             "App icon in detached bubble",
-            "Messages and calls move the app icon into the circle beside the island so the pill shows text only. The bubble retracts as soon as the alert hold expires.",
+            "Messages and calls move the app icon into the circle beside the island so the pill shows text only. The circle retracts after the bubble hold (3 s by default) and shows a count when several messages are waiting.",
             settings.alertIconInBubble,
         ) { onSettingsChange { s -> s.copy(alertIconInBubble = it) } }
         ToggleRow(
