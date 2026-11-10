@@ -63,8 +63,8 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   names are not yet verified on hardware.
 - **Timer**: a persistent countdown that outranks maps/downloads/media on the base layer; calls
   sit above all alerts. Start 1/5/10/25
-  minute presets from the app; the compact pill shows an orange timer/pause glyph + `mm:ss`.
-  Tap to expand for circular pause/resume + cancel controls leading and a large orange `mm:ss`
+  minute presets from the app; the compact pill shows an orange timer/pause glyph + `mm:ss` / `h:mm:ss`.
+  Tap to expand for circular pause/resume + cancel controls leading and a large orange `mm:ss` / `h:mm:ss`
   trailing, below the lens. Time is
   derived from `SystemClock.elapsedRealtime`, so ticks never drift. While the panel is off/dozing
   the 1 Hz UI ticker is replaced by a single completion wake at the end timestamp; a finished timer shows
@@ -133,6 +133,7 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   the island. **Portrait lock** only
   applies when landscape hiding is off: it keeps the portrait size/top-centre anchor instead of
   re-anchoring to the rotated cutout. The settings app itself remains portrait.
+  **Suppress during Do Not Disturb** (off by default) hides the entire island while Android Do Not Disturb is active.
 - **Customization**: the app is a hub with **one page per category** — Setup, Appearance, Layout,
   Camera hole, Notifications & apps, Sources & timer, Behaviour, Motion & battery, Advanced — each with
   its own *restore defaults* scope (system back returns to the hub). Every source can be switched off;
@@ -141,7 +142,7 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   and expanded geometry, detached-bubble diameter/gap/inset and lens clearance are sliders; idle
   behaviour, linger, tap action, long-press action and haptics are selectable; motion has a master
   switch, a 120 Hz morph hint, opt-in ambient loops with a separate rate and a speed scale; each source
-  accent has swatches + hex entry. Popular apps can be opted out per package.
+  accent has swatches + hex entry. Popular and other installed apps can be opted out per package.
 - Setup page with grant status, the listener's actual connected/waiting state, battery
   optimisation and overlay permission, plus a diagnostics card and an explicit re-check action. Grant
   status is read on resume (event-driven) instead of a 1.5 s polling loop. Settings controls use Material 3 with
@@ -298,6 +299,7 @@ clamped to safe ranges:
 | Corner radius | 8 … 24 dp | 16 dp |
 | Hide in landscape | on/off | on |
 | Hide in fullscreen | on/off | on |
+| Suppress during Do Not Disturb | on/off | off |
 | Portrait lock (when landscape hiding is off) | on/off | on |
 | Compact icon size | 12 … 28 dp | 20 dp |
 | Compact shell edge padding | 4 … 16 dp | 8 dp |
@@ -326,6 +328,7 @@ clamped to safe ranges:
 | Monochrome icons | on/off | off |
 | App icon in detached bubble | on/off (notifications + calls) | on |
 | Bubble hold | 1 … 10 s | 3 s |
+| Battery low / Power save alert holds | 2 … 10 s each | 4 s |
 | Clock (Google / AOSP) timers | on/off | on |
 | Show title in pill | on/off | on |
 | Silent notifications | on/off | on |
@@ -454,8 +457,11 @@ app/src/main/java/com/zenith/nothingisland/
 ├── service/timer/TimerModule.kt          # countdown controller (tick, pause/resume/stop)
 ├── ui/HomeScreen.kt                      # hub + page host + shared panels
 ├── ui/SettingsPages.kt                   # one page per settings category
+├── ui/CustomizationPanels.kt             # category-specific customization panels
+├── ui/InstalledAppEntry.kt               # launcher-app discovery for per-app opt-outs
 ├── ui/theme/                             # black/white/red Nothing palette
 ├── util/ServiceStatus.kt                 # grant checks
+├── util/DndUtil.kt                       # Do Not Disturb interruption-filter helpers
 app/src/test/java/com/zenith/nothingisland/ # local layout/motion/state regression tests
 ```
 

@@ -20,6 +20,9 @@ class IslandVisibilityTest {
         assertFalse(
             IslandVisibilityPolicy.shouldDebounceSuppression(IslandSuppression.NONE, IslandSuppression.LANDSCAPE),
         )
+        assertFalse(
+            IslandVisibilityPolicy.shouldDebounceSuppression(IslandSuppression.NONE, IslandSuppression.DND),
+        )
         // Coming back is never delayed.
         assertFalse(
             IslandVisibilityPolicy.shouldDebounceSuppression(IslandSuppression.FULLSCREEN, IslandSuppression.NONE),
@@ -109,5 +112,43 @@ class IslandVisibilityTest {
         gate.reset()
         assertFalse(gate.calibrated)
         assertNull(gate.report(false))
+    }
+
+    @Test
+    fun dndSuppressesOnlyWhenEnabledAndSubordinateToScreenOff() {
+        assertEquals(
+            IslandSuppression.NONE,
+            IslandVisibilityPolicy.resolve(
+                hideInLandscape = false,
+                hideInFullscreen = false,
+                landscape = false,
+                statusBarVisible = true,
+                suppressDuringDnd = false,
+                dndActive = true,
+            ),
+        )
+        assertEquals(
+            IslandSuppression.DND,
+            IslandVisibilityPolicy.resolve(
+                hideInLandscape = true,
+                hideInFullscreen = true,
+                landscape = true,
+                statusBarVisible = false,
+                suppressDuringDnd = true,
+                dndActive = true,
+            ),
+        )
+        assertEquals(
+            IslandSuppression.SCREEN_OFF,
+            IslandVisibilityPolicy.resolve(
+                hideInLandscape = false,
+                hideInFullscreen = false,
+                landscape = false,
+                statusBarVisible = true,
+                screenOn = false,
+                suppressDuringDnd = true,
+                dndActive = true,
+            ),
+        )
     }
 }

@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.app.RemoteInput
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
+import java.util.Locale
 
 /**
  * Where an island event came from. [priority] orders the *persistent* sources; transient alerts
@@ -145,13 +146,17 @@ sealed interface IslandContent {
     ) : IslandContent {
 
         /**
-         * `mm:ss` for the time left, rounded **up** so a running countdown never reads 00:00
+         * `mm:ss` / `h:mm:ss` for the time left, rounded **up** so a running countdown never reads 00:00
          * before it is actually done. At zero (completion / stopped) it is exactly 00:00.
          */
         val displayTime: String
             get() {
                 val seconds = (remainingMs.coerceAtLeast(0L) + 999L) / 1000L
-                return "%02d:%02d".format(seconds / 60L, seconds % 60L)
+                val h = seconds / 3600L
+                val m = (seconds % 3600L) / 60L
+                val s = seconds % 60L
+                return if (h > 0L) "%d:%02d:%02d".format(Locale.US, h, m, s)
+                else "%02d:%02d".format(Locale.US, m, s)
             }
     }
 }

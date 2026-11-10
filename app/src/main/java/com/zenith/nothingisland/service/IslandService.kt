@@ -1,14 +1,19 @@
 package com.zenith.nothingisland.service
 
 import android.accessibilityservice.AccessibilityService
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.RemoteInput
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import androidx.core.content.ContextCompat
 import com.zenith.nothingisland.data.IslandSettingsRepository
 import com.zenith.nothingisland.overlay.IslandInteraction
 import com.zenith.nothingisland.overlay.IslandOverlay
@@ -47,6 +52,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
     private var settingsJob: Job? = null
     private var stateJob: Job? = null
     private var replyKey: String? = null
+    private var dndReceiver: BroadcastReceiver? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -94,6 +100,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
                     chargingMs = snapshot.chargingDurationSec * 1000L,
                     batteryMs = snapshot.batteryAlertDurationSec * 1000L,
                     bubbleMs = snapshot.bubbleDurationSec * 1000L,
+                    powerSaveMs = snapshot.powerSaveAlertDurationSec * 1000L,
                 )
                 chargingSource.updateSettings(snapshot)
                 if (overlay?.isScreenActive != false) {
@@ -118,6 +125,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
         }
 
         syncPowerObservers()
+        registerDndReceiver()
     }
 
     /**
@@ -363,6 +371,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
         overlay?.release()
         overlay = null
 
+        unregisterDndReceiver()
         runCatching { mediaSource.stop() }
         runCatching { chargingSource.stop() }
         // A rebind (automation, system restart) must not wipe a countdown, so the app-scoped timer
@@ -374,6 +383,35 @@ class IslandService : AccessibilityService(), IslandInteraction {
         IslandStateHolder.clearAll()
 
         if (instance === this) instance = null
+    }
+
+    private fun registerDndReceiver() {
+        if (dndReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                if (intent?.action != NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED) return
+                overlay?.refresh()
+            }
+        }
+        runCatching {
+            ContextCompat.registerReceiver(
+                this,
+                receiver,
+                IntentFilter(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        }.onSuccess {
+            dndReceiver = receiver
+        }.onFailure {
+            Log.w(TAG, "Unable to register DND receiver", it)
+        }
+    }
+
+    private fun unregisterDndReceiver() {
+        val receiver = dndReceiver ?: return
+        dndReceiver = null
+        runCatching { unregisterReceiver(receiver) }
+            .onFailure { Log.w(TAG, "DND receiver was already detached", it) }
     }
 
     companion object {

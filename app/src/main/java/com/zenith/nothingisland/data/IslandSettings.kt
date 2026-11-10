@@ -35,6 +35,7 @@ data class IslandSettings(
     val hideInFullscreen: Boolean = DEFAULT_HIDE_IN_FULLSCREEN,
     val hideInLandscape: Boolean = DEFAULT_HIDE_IN_LANDSCAPE,
     val lockPortrait: Boolean = DEFAULT_LOCK_PORTRAIT,
+    val suppressDuringDnd: Boolean = DEFAULT_SUPPRESS_DURING_DND,
     val holeEnabled: Boolean = DEFAULT_HOLE_ENABLED,
     val holeCenterXDp: Int = DEFAULT_HOLE_CENTER_X_DP,
     val holeCenterYDp: Int = DEFAULT_HOLE_CENTER_Y_DP,
@@ -78,6 +79,7 @@ data class IslandSettings(
     val bubbleDurationSec: Int = DEFAULT_BUBBLE_DURATION_SEC,
     val chargingDurationSec: Int = DEFAULT_CHARGING_DURATION_SEC,
     val batteryAlertDurationSec: Int = DEFAULT_BATTERY_ALERT_DURATION_SEC,
+    val powerSaveAlertDurationSec: Int = DEFAULT_POWER_SAVE_ALERT_DURATION_SEC,
     val batteryLowThresholdPercent: Int = DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT,
     val redactOnLockscreen: Boolean = true,
     val autoExpandCalls: Boolean = true,
@@ -140,6 +142,7 @@ data class IslandSettings(
         bubbleDurationSec = bubbleDurationSec.coerceIn(BUBBLE_DURATION_RANGE),
         chargingDurationSec = chargingDurationSec.coerceIn(ALERT_DURATION_RANGE),
         batteryAlertDurationSec = batteryAlertDurationSec.coerceIn(ALERT_DURATION_RANGE),
+        powerSaveAlertDurationSec = powerSaveAlertDurationSec.coerceIn(ALERT_DURATION_RANGE),
         batteryLowThresholdPercent = batteryLowThresholdPercent.coerceIn(BATTERY_LOW_THRESHOLD_RANGE),
         expandedMaxWidthDp = expandedMaxWidthDp.coerceIn(EXPANDED_MAX_WIDTH_RANGE),
         expandedCornerRadiusDp = expandedCornerRadiusDp.coerceIn(EXPANDED_CORNER_RADIUS_RANGE),
@@ -198,6 +201,7 @@ data class IslandSettings(
         const val DEFAULT_HIDE_IN_FULLSCREEN = true
         const val DEFAULT_HIDE_IN_LANDSCAPE = true
         const val DEFAULT_LOCK_PORTRAIT = true
+        const val DEFAULT_SUPPRESS_DURING_DND = false
         const val DEFAULT_HOLE_ENABLED = true
         const val DEFAULT_HOLE_CENTER_X_DP = 0
         const val DEFAULT_HOLE_CENTER_Y_DP = 26
@@ -227,6 +231,7 @@ data class IslandSettings(
         const val DEFAULT_BUBBLE_DURATION_SEC = 3
         const val DEFAULT_CHARGING_DURATION_SEC = 4
         const val DEFAULT_BATTERY_ALERT_DURATION_SEC = 4
+        const val DEFAULT_POWER_SAVE_ALERT_DURATION_SEC = 4
         const val DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT = 20
         const val DEFAULT_EXPANDED_MAX_WIDTH_DP = 408
         const val DEFAULT_EXPANDED_CORNER_RADIUS_DP = 44
@@ -281,6 +286,7 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.hideInFullscreen] = next.hideInFullscreen
             preferences[Keys.hideInLandscape] = next.hideInLandscape
             preferences[Keys.lockPortrait] = next.lockPortrait
+            preferences[Keys.suppressDuringDnd] = next.suppressDuringDnd
             preferences[Keys.holeEnabled] = next.holeEnabled
             preferences[Keys.holeCenterX] = next.holeCenterXDp
             preferences[Keys.holeCenterY] = next.holeCenterYDp
@@ -319,6 +325,7 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.bubbleDuration] = next.bubbleDurationSec
             preferences[Keys.chargingDuration] = next.chargingDurationSec
             preferences[Keys.batteryAlertDuration] = next.batteryAlertDurationSec
+            preferences[Keys.powerSaveAlertDuration] = next.powerSaveAlertDurationSec
             preferences[Keys.batteryLowThreshold] = next.batteryLowThresholdPercent
             preferences[Keys.redactOnLockscreen] = next.redactOnLockscreen
             preferences[Keys.autoExpandCalls] = next.autoExpandCalls
@@ -359,6 +366,7 @@ class IslandSettingsRepository private constructor(private val context: Context)
     suspend fun setHideInFullscreen(enabled: Boolean) = update { it.copy(hideInFullscreen = enabled) }
     suspend fun setHideInLandscape(enabled: Boolean) = update { it.copy(hideInLandscape = enabled) }
     suspend fun setLockPortrait(enabled: Boolean) = update { it.copy(lockPortrait = enabled) }
+    suspend fun setSuppressDuringDnd(enabled: Boolean) = update { it.copy(suppressDuringDnd = enabled) }
     suspend fun setHoleEnabled(enabled: Boolean) = update { it.copy(holeEnabled = enabled) }
     suspend fun setHoleCenterXDp(value: Int) = update { it.copy(holeCenterXDp = value) }
     suspend fun setHoleCenterYDp(value: Int) = update { it.copy(holeCenterYDp = value) }
@@ -395,6 +403,7 @@ private object Keys {
     val hideInFullscreen = booleanPreferencesKey("hide_in_fullscreen")
     val hideInLandscape = booleanPreferencesKey("hide_in_landscape")
     val lockPortrait = booleanPreferencesKey("lock_portrait")
+    val suppressDuringDnd = booleanPreferencesKey("suppress_during_dnd")
     val holeEnabled = booleanPreferencesKey("hole_enabled")
     val holeCenterX = intPreferencesKey("hole_center_x_dp")
     val holeCenterY = intPreferencesKey("hole_center_y_dp")
@@ -433,6 +442,7 @@ private object Keys {
     val bubbleDuration = intPreferencesKey("bubble_duration_sec")
     val chargingDuration = intPreferencesKey("charging_duration_sec")
     val batteryAlertDuration = intPreferencesKey("battery_alert_duration_sec")
+    val powerSaveAlertDuration = intPreferencesKey("power_save_alert_duration_sec")
     val batteryLowThreshold = intPreferencesKey("battery_low_threshold_percent")
     val redactOnLockscreen = booleanPreferencesKey("redact_on_lockscreen")
     val autoExpandCalls = booleanPreferencesKey("auto_expand_calls")
@@ -473,6 +483,7 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     hideInFullscreen = this[Keys.hideInFullscreen] ?: IslandSettings.DEFAULT_HIDE_IN_FULLSCREEN,
     hideInLandscape = this[Keys.hideInLandscape] ?: IslandSettings.DEFAULT_HIDE_IN_LANDSCAPE,
     lockPortrait = this[Keys.lockPortrait] ?: IslandSettings.DEFAULT_LOCK_PORTRAIT,
+    suppressDuringDnd = this[Keys.suppressDuringDnd] ?: IslandSettings.DEFAULT_SUPPRESS_DURING_DND,
     holeEnabled = this[Keys.holeEnabled] ?: IslandSettings.DEFAULT_HOLE_ENABLED,
     holeCenterXDp = this[Keys.holeCenterX] ?: IslandSettings.DEFAULT_HOLE_CENTER_X_DP,
     holeCenterYDp = this[Keys.holeCenterY] ?: IslandSettings.DEFAULT_HOLE_CENTER_Y_DP,
@@ -511,6 +522,7 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     bubbleDurationSec = this[Keys.bubbleDuration] ?: IslandSettings.DEFAULT_BUBBLE_DURATION_SEC,
     chargingDurationSec = this[Keys.chargingDuration] ?: IslandSettings.DEFAULT_CHARGING_DURATION_SEC,
     batteryAlertDurationSec = this[Keys.batteryAlertDuration] ?: IslandSettings.DEFAULT_BATTERY_ALERT_DURATION_SEC,
+    powerSaveAlertDurationSec = this[Keys.powerSaveAlertDuration] ?: IslandSettings.DEFAULT_POWER_SAVE_ALERT_DURATION_SEC,
     batteryLowThresholdPercent = this[Keys.batteryLowThreshold] ?: IslandSettings.DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT,
     redactOnLockscreen = this[Keys.redactOnLockscreen] ?: true,
     autoExpandCalls = this[Keys.autoExpandCalls] ?: true,

@@ -52,15 +52,23 @@ object IslandStateHolder {
     private var notificationBubbleMs = BUBBLE_DURATION_MS
     private var chargingDurationMs = TRANSIENT_DURATION_MS
     private var batteryAlertDurationMs = TRANSIENT_DURATION_MS
+    private var powerSaveAlertDurationMs = TRANSIENT_DURATION_MS
 
     val current: IslandEvent? get() = _state.value
 
     @Synchronized
-    fun updateAlertDurations(notificationMs: Long, chargingMs: Long, batteryMs: Long, bubbleMs: Long) {
+    fun updateAlertDurations(
+        notificationMs: Long,
+        chargingMs: Long,
+        batteryMs: Long,
+        bubbleMs: Long,
+        powerSaveMs: Long,
+    ) {
         notificationBubbleMs = bubbleMs.coerceAtLeast(500L)
         notificationDurationMs = notificationMs.coerceAtLeast(500L)
         chargingDurationMs = chargingMs.coerceAtLeast(500L)
         batteryAlertDurationMs = batteryMs.coerceAtLeast(500L)
+        powerSaveAlertDurationMs = powerSaveMs.coerceAtLeast(500L)
     }
 
     @Synchronized
@@ -391,7 +399,7 @@ object IslandStateHolder {
     private fun armPowerSaveTimeout(generation: Int) {
         powerSaveJob?.cancel()
         powerSaveJob = scope.launch {
-            delay(batteryAlertDurationMs)
+            delay(powerSaveAlertDurationMs)
             synchronized(this@IslandStateHolder) {
                 if (powerSaveGeneration != generation || powerSave == null) return@synchronized
                 powerSave = null

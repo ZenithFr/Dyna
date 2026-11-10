@@ -21,6 +21,7 @@ import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandSource
 import com.zenith.nothingisland.service.IslandStateHolder
 import com.zenith.nothingisland.service.NotificationAction
+import com.zenith.nothingisland.util.isDndSilent
 
 /**
  * Routes public notification contracts into island sources:
@@ -29,12 +30,10 @@ import com.zenith.nothingisland.service.NotificationAction
  */
 class NotificationSource(private val context: Context) {
 
-    private val notificationManager: NotificationManager? =
-        context.getSystemService(NotificationManager::class.java)
     private val packageManager: PackageManager = context.packageManager
     private val keyguardManager: KeyguardManager? = context.getSystemService(KeyguardManager::class.java)
 
-    private val labelCache = mutableMapOf<String, String>()
+    private val labelCache = LruCache<String, String>(MAX_PACKAGE_ICONS)
     private val iconCache = LruCache<String, Drawable>(MAX_PACKAGE_ICONS)
     private val activeKeys = mutableMapOf<String, IslandSource>()
     private val activePackages = mutableMapOf<String, String>()
@@ -147,7 +146,7 @@ class NotificationSource(private val context: Context) {
 
     fun clear() {
         activeKeys.keys.toList().forEach { clearKey(it) }
-        labelCache.clear()
+        labelCache.evictAll()
         iconCache.evictAll()
         signatures.clear()
         activePackages.clear()
@@ -187,7 +186,7 @@ class NotificationSource(private val context: Context) {
             disabledPackages = settings.disabledPackages,
             isSecret = notification.visibility == Notification.VISIBILITY_SECRET,
             isGroupSummary = groupSummary,
-            doNotDisturbNone = isDoNotDisturbSilent(),
+            doNotDisturbNone = context.isDndSilent(),
             importance = ranking?.importance ?: NotificationManager.IMPORTANCE_DEFAULT,
             category = notification.category,
             isMedia = isMedia(notification),
@@ -325,10 +324,6 @@ class NotificationSource(private val context: Context) {
         return notification.extras?.containsKey(Notification.EXTRA_MEDIA_SESSION) == true
     }
 
-    private fun isDoNotDisturbSilent(): Boolean = runCatching {
-        notificationManager?.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_NONE
-    }.getOrDefault(false)
-
     private fun text(notification: Notification, key: String): String? {
         val value = notification.extras?.getCharSequence(key)?.toString()?.trim()
         return value?.takeIf { it.isNotEmpty() }
@@ -385,17 +380,20 @@ class NotificationSource(private val context: Context) {
         return icon
     }
 
-    private fun appLabel(packageName: String): String = labelCache.getOrPut(packageName) {
-        runCatching {
-            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0L))
-            } else {
-                @Suppress("DEPRECATION")
-                packageManager.getApplicationInfo(packageName, 0)
-            }
-            packageManager.getApplicationLabel(info).toString()
-        }.getOrDefault(packageName.substringAfterLast('.'))
-    }
+    private fun appLabel(packageName: String): String =
+        labelCache.get(packageName) ?: run {
+            val label = runCatching {
+                val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0L))
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.getApplicationInfo(packageName, 0)
+                }
+                packageManager.getApplicationLabel(info).toString()
+            }.getOrDefault(packageName.substringAfterLast('.'))
+            labelCache.put(packageName, label)
+            label
+        }
 
     private fun pendingIntentExtra(extras: Bundle, key: String): PendingIntent? =
         parcelableExtra(extras, key, PendingIntent::class.java)

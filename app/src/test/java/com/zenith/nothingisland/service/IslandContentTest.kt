@@ -33,4 +33,13 @@ class IslandContentTest {
         assertEquals("01:00", IslandContent.Timer("TIMER", 59_001L, true, 0L).displayTime)
         assertEquals("00:00", IslandContent.Timer("TIMER", -1L, false, 0L).displayTime)
     }
+
+    @Test
+    fun timerFormatsHoursWhenSixtyMinutesOrMore() {
+        assertEquals("1:30:00", IslandContent.Timer("TIMER", 5_400_000L, true, 0L).displayTime)
+        assertEquals("1:00:00", IslandContent.Timer("TIMER", 3_600_000L, true, 0L).displayTime)
+        assertEquals("1:00:00", IslandContent.Timer("TIMER", 3_599_001L, true, 0L).displayTime)
+        assertEquals("59:59", IslandContent.Timer("TIMER", 3_599_000L, true, 0L).displayTime)
+        assertEquals("01:00", IslandContent.Timer("TIMER", 59_999L, true, 0L).displayTime)
+    }
 }

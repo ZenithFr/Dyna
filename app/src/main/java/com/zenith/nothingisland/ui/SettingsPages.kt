@@ -204,6 +204,8 @@ internal fun SettingsPage(
             AlertsPrivacyPanel(settings, onSettingsChange)
             PageSection("App integrations")
             IntegrationsPanel(settings, onSettingsChange)
+            PageSection("Other installed apps")
+            InstalledAppsPanel(settings, onSettingsChange)
         }
 
         IslandSettingsCategory.SOURCES -> {

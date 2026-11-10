@@ -26,6 +26,7 @@ import com.zenith.nothingisland.data.IslandShape
 import com.zenith.nothingisland.data.pillLeftDp
 import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandEvent
+import com.zenith.nothingisland.util.isDndActive
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -329,12 +330,15 @@ class IslandOverlay(private val serviceContext: Context) {
             val bounds = windowManager.maximumWindowMetrics.bounds
             val landscape = bounds.width() > bounds.height() ||
                 resources().configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            val dndActive = if (settings.suppressDuringDnd) serviceContext.isDndActive() else false
             val next = IslandVisibilityPolicy.resolve(
                 hideInLandscape = settings.hideInLandscape,
                 hideInFullscreen = settings.hideInFullscreen,
                 landscape = landscape,
                 statusBarVisible = statusBarVisible,
                 screenOn = screenOn,
+                suppressDuringDnd = settings.suppressDuringDnd,
+                dndActive = dndActive,
             )
             if (next != suppression) {
                 if (IslandVisibilityPolicy.shouldDebounceSuppression(suppression, next)) {

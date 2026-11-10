@@ -12,6 +12,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,6 +32,8 @@ import com.zenith.nothingisland.ui.theme.NothingMuted
 import com.zenith.nothingisland.ui.theme.NothingRed
 import com.zenith.nothingisland.ui.theme.NothingSurface
 import com.zenith.nothingisland.ui.theme.NothingWhite
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private typealias SettingsChange = ((IslandSettings) -> IslandSettings) -> Unit
 
@@ -83,8 +87,11 @@ internal fun AlertsPrivacyPanel(settings: IslandSettings, onSettingsChange: Sett
             CalibrationSlider("Charging hold", settings.chargingDurationSec, IslandSettings.ALERT_DURATION_RANGE, unit = "s") {
                 onSettingsChange { s -> s.copy(chargingDurationSec = it) }
             }
-            CalibrationSlider("Battery alert hold", settings.batteryAlertDurationSec, IslandSettings.ALERT_DURATION_RANGE, unit = "s") {
+            CalibrationSlider("Battery low alert hold", settings.batteryAlertDurationSec, IslandSettings.ALERT_DURATION_RANGE, unit = "s") {
                 onSettingsChange { s -> s.copy(batteryAlertDurationSec = it) }
+            }
+            CalibrationSlider("Power save alert hold", settings.powerSaveAlertDurationSec, IslandSettings.ALERT_DURATION_RANGE, unit = "s") {
+                onSettingsChange { s -> s.copy(powerSaveAlertDurationSec = it) }
             }
             CalibrationSlider("Battery low threshold", settings.batteryLowThresholdPercent, IslandSettings.BATTERY_LOW_THRESHOLD_RANGE, unit = "%") {
                 onSettingsChange { s -> s.copy(batteryLowThresholdPercent = it) }
@@ -130,6 +137,89 @@ internal fun IntegrationsPanel(settings: IslandSettings, onSettingsChange: Setti
             }
         }
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+internal fun InstalledAppsPanel(settings: IslandSettings, onSettingsChange: SettingsChange) {
+    val context = LocalContext.current
+    val popularPackages = remember { PopularIntegrations.all.map { it.packageName }.toSet() }
+    var installedApps by remember { mutableStateOf<List<InstalledAppEntry>?>(null) }
+    LaunchedEffect(Unit) {
+        installedApps = withContext(Dispatchers.IO) {
+            loadInstalledAppsExcluding(context, popularPackages)
+        }
+    }
+    var query by rememberSaveable { mutableStateOf("") }
+    val apps = installedApps
+    val filtered = remember(apps, query) {
+        apps?.let { list ->
+            val needle = query.trim()
+            if (needle.isEmpty()) list
+            else list.filter {
+                it.label.contains(needle, ignoreCase = true) ||
+                    it.packageName.contains(needle, ignoreCase = true)
+            }
+        }
+    }
+
+    PanelColumn {
+        Text(
+            "Mute notifications from any other installed app without disabling notifications globally.",
+            style = MaterialTheme.typography.bodySmall,
+            color = NothingMuted,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+        )
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text("Search apps", style = MaterialTheme.typography.labelSmall) },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 8.dp),
+            textStyle = MaterialTheme.typography.bodyMedium,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = NothingRed,
+                unfocusedBorderColor = NothingHairline,
+                focusedTextColor = NothingWhite,
+                unfocusedTextColor = NothingWhite,
+                cursorColor = NothingRed,
+                focusedLabelColor = NothingMuted,
+                unfocusedLabelColor = NothingMuted,
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+            ),
+        )
+        when {
+            filtered == null -> Text(
+                "Loading installed apps…",
+                style = MaterialTheme.typography.bodySmall,
+                color = NothingMuted,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+            )
+            filtered.isEmpty() -> Text(
+                if (query.isBlank()) "No other installed apps found." else "No apps match \"${query.trim()}\".",
+                style = MaterialTheme.typography.bodySmall,
+                color = NothingMuted,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+            )
+            else -> filtered.forEach { app ->
+                val enabled = app.packageName !in settings.disabledPackages
+                ToggleRow(
+                    title = app.label,
+                    description = app.packageName,
+                    checked = enabled,
+                ) { nextEnabled ->
+                    onSettingsChange { s ->
+                        val next = s.disabledPackages.toMutableSet()
+                        if (nextEnabled) next -= app.packageName else next += app.packageName
+                        s.copy(disabledPackages = next)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -272,6 +362,11 @@ internal fun DisplayBehaviorPanel(settings: IslandSettings, onSettingsChange: Se
             "Hide while the status bar is hidden (immersive video/games). Fails open until the inset probe has seen a visible status bar. Reads only inset visibility, not screen content.",
             settings.hideInFullscreen,
         ) { onSettingsChange { s -> s.copy(hideInFullscreen = it) } }
+        ToggleRow(
+            "Suppress during Do Not Disturb",
+            "Hide the entire island (including music, timers and other live activities) while Do Not Disturb is active.",
+            settings.suppressDuringDnd,
+        ) { onSettingsChange { s -> s.copy(suppressDuringDnd = it) } }
         ToggleRow(
             "Portrait lock",
             "Only used when landscape hiding is off: keep the portrait size and top-centre anchor instead of re-anchoring to the rotated cutout.",

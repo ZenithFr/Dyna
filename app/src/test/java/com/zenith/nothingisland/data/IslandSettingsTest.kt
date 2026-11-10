@@ -33,6 +33,7 @@ class IslandSettingsTest {
         val defaults = IslandSettings()
         assertTrue(defaults.hideInLandscape)
         assertTrue(defaults.hideInFullscreen)
+        assertFalse(defaults.suppressDuringDnd)
         assertEquals(IslandSettings.DEFAULT_COMPACT_ICON_SIZE_DP, defaults.compactIconSizeDp)
         assertEquals(IslandSettings.DEFAULT_COMPACT_EDGE_PADDING_DP, defaults.compactEdgePaddingDp)
         assertEquals(IslandSettings.DEFAULT_SATELLITE_SIZE_DP, defaults.satelliteSizeDp)
@@ -100,6 +101,19 @@ class IslandSettingsTest {
         assertEquals(1, IslandSettings(bubbleDurationSec = 0).coerced().bubbleDurationSec)
         assertEquals(10, IslandSettings(bubbleDurationSec = 99).coerced().bubbleDurationSec)
         assertTrue(IslandSettings().clockEnabled)
+    }
+
+    @Test
+    fun powerSaveHoldDefaultsToFourSecondsAndIsClamped() {
+        assertEquals(IslandSettings.DEFAULT_POWER_SAVE_ALERT_DURATION_SEC, IslandSettings().powerSaveAlertDurationSec)
+        assertEquals(
+            IslandSettings.ALERT_DURATION_RANGE.first,
+            IslandSettings(powerSaveAlertDurationSec = 0).coerced().powerSaveAlertDurationSec,
+        )
+        assertEquals(
+            IslandSettings.ALERT_DURATION_RANGE.last,
+            IslandSettings(powerSaveAlertDurationSec = 99).coerced().powerSaveAlertDurationSec,
+        )
     }
 
     @Test

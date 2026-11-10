@@ -21,11 +21,13 @@ class IslandSettingsCategoryTest {
         idleContractDelaySec = 7,
         tapAction = IslandTapAction.OPEN_APP,
         longPressAction = IslandLongPressAction.NONE,
+        suppressDuringDnd = true,
         hapticsEnabled = false,
         alertIconInBubble = false,
         notificationShowTitle = false,
         showSilentNotifications = false,
         notificationDurationSec = 8,
+        powerSaveAlertDurationSec = 9,
         mediaEnabled = false,
         motionEnabled = false,
         ambientAnimationsEnabled = true,
@@ -57,6 +59,7 @@ class IslandSettingsCategoryTest {
         assertEquals(IslandLongPressAction.OPEN_APP, reset.longPressAction)
         assertTrue(reset.hapticsEnabled)
         assertEquals(IslandSettings.DEFAULT_IDLE_CONTRACT_DELAY_SEC, reset.idleContractDelaySec)
+        assertTrue(!reset.suppressDuringDnd)
         assertEquals(customized.shellColorArgb, reset.shellColorArgb)
         assertEquals(customized.notificationDurationSec, reset.notificationDurationSec)
         assertEquals(customized.alertIconInBubble, reset.alertIconInBubble)
@@ -71,6 +74,7 @@ class IslandSettingsCategoryTest {
         assertTrue(reset.notificationShowTitle)
         assertTrue(reset.showSilentNotifications)
         assertEquals(IslandSettings.DEFAULT_NOTIFICATION_DURATION_SEC, reset.notificationDurationSec)
+        assertEquals(IslandSettings.DEFAULT_POWER_SAVE_ALERT_DURATION_SEC, reset.powerSaveAlertDurationSec)
         // Sources are a different page.
         assertEquals(customized.mediaEnabled, reset.mediaEnabled)
     }

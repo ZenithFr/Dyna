@@ -92,6 +92,7 @@ fun IslandSettings.resetCategory(category: IslandSettingsCategory): IslandSettin
             bubbleDurationSec = defaults.bubbleDurationSec,
             chargingDurationSec = defaults.chargingDurationSec,
             batteryAlertDurationSec = defaults.batteryAlertDurationSec,
+            powerSaveAlertDurationSec = defaults.powerSaveAlertDurationSec,
             batteryLowThresholdPercent = defaults.batteryLowThresholdPercent,
             redactOnLockscreen = defaults.redactOnLockscreen,
             autoExpandCalls = defaults.autoExpandCalls,
@@ -120,6 +121,7 @@ fun IslandSettings.resetCategory(category: IslandSettingsCategory): IslandSettin
             hideInFullscreen = defaults.hideInFullscreen,
             hideInLandscape = defaults.hideInLandscape,
             lockPortrait = defaults.lockPortrait,
+            suppressDuringDnd = defaults.suppressDuringDnd,
         )
         IslandSettingsCategory.MOTION -> copy(
             motionEnabled = defaults.motionEnabled,

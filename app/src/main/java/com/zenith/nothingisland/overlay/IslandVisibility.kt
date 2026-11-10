@@ -9,7 +9,7 @@ import android.view.WindowInsets
 import android.view.WindowManager
 
 /** Why the island is currently not allowed on screen. [NONE] means it may render normally. */
-enum class IslandSuppression { NONE, SCREEN_OFF, LANDSCAPE, FULLSCREEN }
+enum class IslandSuppression { NONE, SCREEN_OFF, DND, LANDSCAPE, FULLSCREEN }
 
 /**
  * Pure visibility policy. Fullscreen means the status bar is hidden: that is the system signal
@@ -38,8 +38,11 @@ object IslandVisibilityPolicy {
         landscape: Boolean,
         statusBarVisible: Boolean?,
         screenOn: Boolean = true,
+        suppressDuringDnd: Boolean = false,
+        dndActive: Boolean = false,
     ): IslandSuppression = when {
         !screenOn -> IslandSuppression.SCREEN_OFF
+        suppressDuringDnd && dndActive -> IslandSuppression.DND
         hideInLandscape && landscape -> IslandSuppression.LANDSCAPE
         hideInFullscreen && statusBarVisible == false -> IslandSuppression.FULLSCREEN
         else -> IslandSuppression.NONE

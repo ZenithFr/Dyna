@@ -88,7 +88,7 @@ class IslandStateHolderTest {
     @Test
     fun bubbleRetractsAfterItsOwnDurationWhileTheAlertStaysUp() = runTest {
         IslandStateHolder.updateAlertDurations(
-            notificationMs = 6_000L, chargingMs = 4_000L, batteryMs = 4_000L, bubbleMs = 3_000L,
+            notificationMs = 6_000L, chargingMs = 4_000L, batteryMs = 4_000L, bubbleMs = 3_000L, powerSaveMs = 4_000L,
         )
         IslandStateHolder.postNotification(notification("a"))
         assertTrue((IslandStateHolder.current?.content as IslandContent.Notification).showBubble)
@@ -100,6 +100,7 @@ class IslandStateHolderTest {
         IslandStateHolder.updateAlertDurations(
             notificationMs = IslandStateHolder.TRANSIENT_DURATION_MS, chargingMs = IslandStateHolder.TRANSIENT_DURATION_MS,
             batteryMs = IslandStateHolder.TRANSIENT_DURATION_MS, bubbleMs = IslandStateHolder.BUBBLE_DURATION_MS,
+            powerSaveMs = IslandStateHolder.TRANSIENT_DURATION_MS,
         )
     }
 
@@ -201,5 +202,41 @@ class IslandStateHolderTest {
         advanceTimeBy(IslandStateHolder.TRANSIENT_DURATION_MS)
         runCurrent()
         assertEquals(IslandSource.Media, IslandStateHolder.current?.source)
+    }
+
+    @Test
+    fun powerSaveAndBatteryLowUseIndependentHoldDurations() = runTest {
+        IslandStateHolder.updateAlertDurations(
+            notificationMs = IslandStateHolder.TRANSIENT_DURATION_MS,
+            chargingMs = IslandStateHolder.TRANSIENT_DURATION_MS,
+            batteryMs = 2_000L,
+            bubbleMs = IslandStateHolder.BUBBLE_DURATION_MS,
+            powerSaveMs = 8_000L,
+        )
+        try {
+            IslandStateHolder.postMedia(media())
+            IslandStateHolder.postBatteryLow(IslandContent.BatteryLow(15))
+            assertEquals(IslandSource.BatteryLow, IslandStateHolder.current?.source)
+            advanceTimeBy(2_000L)
+            runCurrent()
+            assertEquals(IslandSource.Media, IslandStateHolder.current?.source)
+
+            IslandStateHolder.postPowerSave(IslandContent.PowerSave(true))
+            assertEquals(IslandSource.PowerSave, IslandStateHolder.current?.source)
+            advanceTimeBy(4_000L)
+            runCurrent()
+            assertEquals(IslandSource.PowerSave, IslandStateHolder.current?.source)
+            advanceTimeBy(4_000L)
+            runCurrent()
+            assertEquals(IslandSource.Media, IslandStateHolder.current?.source)
+        } finally {
+            IslandStateHolder.updateAlertDurations(
+                notificationMs = IslandStateHolder.TRANSIENT_DURATION_MS,
+                chargingMs = IslandStateHolder.TRANSIENT_DURATION_MS,
+                batteryMs = IslandStateHolder.TRANSIENT_DURATION_MS,
+                bubbleMs = IslandStateHolder.BUBBLE_DURATION_MS,
+                powerSaveMs = IslandStateHolder.TRANSIENT_DURATION_MS,
+            )
+        }
     }
 }
