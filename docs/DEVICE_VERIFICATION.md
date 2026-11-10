@@ -200,7 +200,7 @@ relevant log lines here only after running them on the phone.
 
 ---
 
-## Run 2 — 2026-11-10 · `master` @ `412a0bd` · v0.5.0 debug (clock card, swipe-to-dismiss)
+## Run 2 — 2026-11-10 · `master` @ `412a0bd` + `3e8e8f6` (stopwatch custom view) · v0.5.0 debug (clock card, swipe-to-dismiss)
 
 Wireless ADB (`adb-00196654H003076-ptc6TG (2)._adb-tls-connect._tcp`), Nothing Phone (A001), debug APK.
 
@@ -216,16 +216,20 @@ Wireless ADB (`adb-00196654H003076-ptc6TG (2)._adb-tls-connect._tcp`), Nothing P
 | Expanded clock layout | tap the pill while the card is shown | `TIMER` label centred above a centred 28 sp time; Pause / Add 1 min / Open below. No progress bar, no percentage. |
 | Digit roll | `adb shell screenrecord --time-limit 4` → 363 frames @ 90 fps, frame-difference scan | The biggest frame deltas cluster at f0070–f0078, i.e. the 05:20 → 05:19 boundary: the old ones digit slides down out of the viewport and the new one drops in from above (countdown rolls downward). |
 | No detached clock bubble | screenshot while the clock card was the active source | Shell only. `ClockActivity.satelliteIcon()` returns `null`, so the Clock app icon is never mirrored into the bubble. |
-| Swipe clears the island | `adb shell cmd notification post -S bigtext -t "Swipe test" swipetest "slide me away"` then `adb shell input swipe 720 70 300 70 280` inside the hold window | The alert disappears from both presentations immediately; the island falls back to the clock card. The gesture itself was broken by a `cancelTouch()` call on swipe start that cleared `activePointerId`; only the press is cancelled now. |
+| Swipe dismisses the island and the shade | `adb shell cmd notification post -S bigtext -t SwipeE swipeE "slide E away"` then `adb shell input swipe 820 68 420 68 250` ~1.3 s after the post | `D IslandSwipe: swipe start dx=-45`, `swipe up swept=-391 threshold=189` (189 px = 72 dp), then `D IslandNotifications: removed pkg=com.android.shell`; `cmd notification list` no longer contains `swipeE`. Both copies are gone from one gesture. |
+| The gesture needs the pill to be settled | same command fired 0.3 s after the post | Nothing happens: the alert is still morphing, `onTouchEvent` refuses input and `targets` is empty. Wait for the bubble spring before swiping; 1.3 s is comfortably inside the 4 s hold. |
+| Only live posts are queued | two `cmd notification post` calls 1 s apart while ~9 Photos notifications sat in the shade | Island went `idle -> LINGERING` exactly 8 s after the second post (two 4 s turns) and then dormant — the shade history was never replayed. The detached bubble showed a badge of **2**, not 11. |
+
+| Stopwatch surfaces as a clock card | Start on the Clock app's Stopwatch tab, then leave the app | `cmd notification list` shows `com.google.android.deskclock` with `channel=Stopwatch v2`, `showChronometer=false`, `android.title=null` and a custom `contentView` (`res/kE.xml` = `chronometer_notif_content_running`). The sort key is absent, so `ClockParser` returns null and `ClockRemoteViews` inflates the view to read the `Chronometer` base. Without that step the notification fell back to a generic message card titled "Clock" **with a detached bubble** — the exact bug this run fixed. |
+| Live stopwatch on the compact pill | two screenshots 3 s apart | Stopwatch glyph left of the cutout, `08:05` → `08:09` right of it, matching the Clock app's own `08:37.97`; no detached bubble. Elapsed is `SystemClock.elapsedRealtime() - base`, so it cannot drift. |
+| Paused stopwatch | tap the big Stop button, background the app | The app re-posts with `contentView=…/0x7f0e0046` (`chronometer_notif_content_stopped`), whose `id/chronometer` is a **TextView** holding the frozen value. The card reads that text: `08:49` in two screenshots 2 s apart (frozen), expanded card shows `PAUSED`, `08:49`, Reset / Start / Open. |
+| Stopwatch never detaches a bubble | same screenshots | `ClockActivity.satelliteIcon()` is null for both kinds, so the shell stays alone in the pill. |
 
 ### Not yet confirmed
 
 | Check | Why it is open |
 | --- | --- |
-| Swipe also cancels the shade copy | `adb shell cmd notification list` still showed `0|com.android.shell|…|swipetest` after the swipe and no `removed` line was logged. `IslandNotificationListener.dismiss()` now logs the failure (`cancel failed for <key>`) instead of swallowing it — needs one retest on this build. |
-| Badge counts only alerts that arrive while the island runs | Shade restoration no longer queues anything (`NotificationSource.seed` only remembers keys so later updates/removals still route), so a post with other shade entries present must show `stackCount = 1`. Untested on device. |
-| Stopwatch decode | Not started on device yet; expected live elapsed time + the stopwatch glyph (`ClockParser` reads the `Σ` total and per-platform chronometer extras). |
-| No detached bubble on a **stopwatch** | Derived from the same `ClockActivity` path as the timer, still to be seen physically. |
+| AOSP Clock's stopwatch (`com.android.deskclock`) | Only the Google Clock path was exercised on this phone. The platform chronometer branch is unit tested, the custom-view branch is layout-agnostic. |
 
 ---
 

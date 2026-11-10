@@ -66,7 +66,10 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   message alert, and it hands the island back to the next base source when it does. The remaining /
   elapsed time is read from the notification the Clock app already publishes: the platform chronometer
   extras when present, otherwise the live state Google/OnePlus Clock pack into the notification's
-  public sort key (`RUNNING|…|Σ0:03:00|Δ0:00:04|⏳0:02:56`). The card re-anchors to
+  public sort key (`RUNNING|…|Σ0:03:00|Δ0:00:04|⏳0:02:56`). Google Clock's stopwatch publishes
+  neither, only a custom `RemoteViews`; that view is inflated in-process once per post to read the
+  `Chronometer` base (running) or the frozen time text (paused), and a notification whose view
+  yields neither stays a plain activity card rather than showing a guessed time. The card re-anchors to
   `SystemClock.elapsedRealtime` and a 1 Hz ticker refreshes it, so the compact pill shows the live
   `mm:ss` (split around the camera hole as glyph left / time right), and the expanded card centres the
   time with the changed digits rolling downward each second. An `EXPIRED` timer is left to the Clock
