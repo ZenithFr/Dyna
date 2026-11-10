@@ -41,8 +41,11 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   the old restrictive mask once on upgrade, so silent messages and ongoing calls/downloads can reach
   the app-level gate. If the reply overlay cannot take focus, the conversation's
   content intent is opened instead of sending a result-less reply intent. When the alert expires
-  the island falls back to the persistent base (timer, then maps, then downloads, then media),
-  else idle.
+  the island falls back to the persistent base (timer, then clock, then maps, then downloads, then
+  media), else idle. Every queued alert gets exactly one turn: a message that has already been shown
+  leaves the island queue, and alerts restored from the shade on reconnect only feed the badge count,
+  so old history never replays behind a new post. A message can be swiped left or right in either
+  presentation (compact or expanded) to dismiss it from the island **and** cancel it in the shade.
 - **Calls**: `Notification.CallStyle` incoming/ongoing calls surface above everything else, with
   answer/decline/end controls and optional auto-expand. No Shizuku or telecom role is required.
 - **Charging / battery**: plug-in shows a green bolt + `xx%` (`FULL` at 100 %); crossing the
@@ -57,10 +60,20 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
 - **Maps / navigation**: navigation-category notifications and known maps packages become a
   turn-by-turn card with an open-maps action. This is a public-notification integration, not a
   private Google Maps/Waze SDK hook.
-- **Clock**: ongoing timers from the Google Clock (`com.google.android.deskclock`) or AOSP Clock
-  (`com.android.deskclock`) apps are shown as a persistent activity card with the Clock's own actions.
-  Alarms stay ordinary alerts. Controlled by **Sources & timer → Clock** (on by default). Package
-  names are not yet verified on hardware.
+- **Clock**: a running timer or stopwatch from the Google Clock (`com.google.android.deskclock`) or
+  AOSP Clock (`com.android.deskclock`) apps becomes a persistent activity card with the Clock's own
+  actions (pause, +1 min, reset, stop). It stays until the countdown ends or you dismiss it, unlike a
+  message alert, and it hands the island back to the next base source when it does. The remaining /
+  elapsed time is read from the notification the Clock app already publishes: the platform chronometer
+  extras when present, otherwise the live state Google/OnePlus Clock pack into the notification's
+  public sort key (`RUNNING|…|Σ0:03:00|Δ0:00:04|⏳0:02:56`). The card re-anchors to
+  `SystemClock.elapsedRealtime` and a 1 Hz ticker refreshes it, so the compact pill shows the live
+  `mm:ss` (split around the camera hole as glyph left / time right), and the expanded card centres the
+  time with the changed digits rolling downward each second. An `EXPIRED` timer is left to the Clock
+  app's own "time's up" alarm, which stays an ordinary alert. The clock card never detaches the Clock
+  app icon into the bubble: its own timer/stopwatch glyph is the identity. Controlled by
+  **Sources & timer → Clock** (on by default); the Google Clock sort-key shape is verified on a
+  Nothing Phone (A001), AOSP Clock's chronometer path on the platform contract.
 - **Timer**: a persistent countdown that outranks maps/downloads/media on the base layer; calls
   sit above all alerts. Start 1/5/10/25
   minute presets from the app; the compact pill shows an orange timer/pause glyph + `mm:ss` / `h:mm:ss`.
@@ -74,7 +87,8 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   island compact and moves the owning app's icon into its own circle a gap to the right. Notification
   and call alerts use the same bubble under their own switch (**App icon in detached bubble**): while
   the bubble carries the icon, the compact shell draws text only, never a duplicate icon. Album art and
-  the timer glyph are content rather than app identity, so they always stay in the shell. Detach and
+  the timer/clock glyph are content rather than app identity, so they always stay in the shell, and
+  the mirrored clock card never gets a detached bubble. Detach and
   re-attach are a mitosis-style motion: the daughter circle grows from the trailing shell edge, a
   Bézier neck thins and pinches off, and the same spring reverses the union on expand/retract. The
   circle is part of the island for touches, its surface space is reserved so an activity starting or
@@ -329,7 +343,7 @@ clamped to safe ranges:
 | App icon in detached bubble | on/off (notifications + calls) | on |
 | Bubble hold | 1 … 10 s | 3 s |
 | Battery low / Power save alert holds | 2 … 10 s each | 4 s |
-| Clock (Google / AOSP) timers | on/off | on |
+| Clock (Google / AOSP) timers + stopwatch | on/off | on |
 | Show title in pill | on/off | on |
 | Silent notifications | on/off | on |
 | Verbose logging | on/off | off |
@@ -396,8 +410,12 @@ adb shell cmd notification post -S bigtext -t "Nothing Island" ni_test "Tap the 
 #     as each is dismissed. Each bubble holds 3 s by default. There must be no percentage on any card.
 # 4. Charging: plug/unplug. Expect a 4s bolt + percentage card; at 100% it reads FULL.
 
-# 5a. Clock: start a timer in the Google or AOSP Clock app. Expect an activity card with the Clock's
-#     actions and no progress bar. Turn Clock off in Sources & timer and it must not appear.
+# 5a. Clock: start a timer in the Google or AOSP Clock app. Expect a persistent card with the Clock's
+#     own actions and no progress bar: live mm:ss on the compact pill, a centred time with the changed
+#     digits rolling downward when expanded, no detached app-icon bubble, and no self-expiry. A
+#     stopwatch shows the elapsed time the same way. Turn Clock off in Sources & timer and neither
+#     must appear; a ringing alarm stays an ordinary alert.
+# 5b. Swipe a message left or right (compact or expanded): it leaves the island and the shade.
 # 5. Timer: open the app, pick a preset (1/5/10/25 min) and press START.
 #    Compact pill shows timer/pause glyph + mm:ss; tap for circular pause/resume + cancel and big time.
 #    Pause holds the remaining time; resume continues. Let it finish: TIME'S UP / 00:00 for ~4s,

@@ -79,7 +79,7 @@ object NotificationGate {
         downloadsEnabled: Boolean,
         navigationEnabled: Boolean,
         showSilentNotifications: Boolean,
-        isClockApp: Boolean,
+        isClockActivity: Boolean,
         clockEnabled: Boolean,
     ): NotificationDecision {
         if (packageName == ownPackageName) return NotificationDecision.drop(NotificationDrop.OWN_PACKAGE)
@@ -99,9 +99,11 @@ object NotificationGate {
             else NotificationDecision.drop(NotificationDrop.CALLS_OFF)
         }
         if (isMedia) return NotificationDecision.drop(NotificationDrop.MEDIA)
-        // A running clock timer or stopwatch is an ongoing activity; a ringing alarm is a plain alert.
-        if (isClockApp && isOngoing) {
-            return if (clockEnabled) NotificationDecision.show(IslandSource.Download)
+        // A running clock timer or stopwatch is a live activity that stays until it ends or is
+        // dismissed; a ringing alarm has no clock state and stays a plain alert. Clock apps do not
+        // mark their timer notification ongoing, so the caller decides from the decoded state.
+        if (isClockActivity) {
+            return if (clockEnabled) NotificationDecision.show(IslandSource.Clock)
             else NotificationDecision.drop(NotificationDrop.CLOCK_OFF)
         }
         if (category == CATEGORY_SERVICE) return NotificationDecision.drop(NotificationDrop.SERVICE)

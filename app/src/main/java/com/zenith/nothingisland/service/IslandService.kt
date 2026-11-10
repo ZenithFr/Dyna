@@ -21,6 +21,7 @@ import com.zenith.nothingisland.overlay.IslandReplyWindow
 import com.zenith.nothingisland.overlay.TransportCommand
 import com.zenith.nothingisland.service.charging.ChargingSource
 import com.zenith.nothingisland.service.media.MediaSource
+import com.zenith.nothingisland.service.notification.IslandNotificationListener
 import com.zenith.nothingisland.service.timer.TimerModule
 import com.zenith.nothingisland.util.ServiceStatus
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +29,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -53,6 +56,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
     private var stateJob: Job? = null
     private var replyKey: String? = null
     private var dndReceiver: BroadcastReceiver? = null
+    private var clockTickerJob: Job? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -121,6 +125,8 @@ class IslandService : AccessibilityService(), IslandInteraction {
                     replyKey = null
                 }
                 overlay?.render(event)
+                // A mirrored clock card ticks once a second; nothing else in the island polls.
+                if (event?.source == IslandSource.Clock) startClockTicker() else stopClockTicker()
             }
         }
 
@@ -192,6 +198,35 @@ class IslandService : AccessibilityService(), IslandInteraction {
     // IslandInteraction
     // ---------------------------------------------------------------------------------------
 
+    /**
+     * Keeps the mirrored clock card's time moving. The holder recomputes the text from the
+     * notification's own anchor, so this only re-publishes once a second while it is on screen.
+     */
+    private fun startClockTicker() {
+        if (clockTickerJob != null) return
+        // The card may have been covered by an alert (which stops the ticker): catch it up now so
+        // it never reappears showing a time from the last time it was visible.
+        IslandStateHolder.tickClock(SystemClock.elapsedRealtime())
+        clockTickerJob = scope.launch {
+            while (isActive) {
+                delay(1_000L)
+                IslandStateHolder.tickClock(SystemClock.elapsedRealtime())
+            }
+        }
+    }
+
+    private fun stopClockTicker() {
+        clockTickerJob?.cancel()
+        clockTickerJob = null
+    }
+
+    override fun onNotificationDismiss() {
+        val key = (IslandStateHolder.current?.content as? IslandContent.Notification)?.key ?: return
+        // Match the OS: dismissing on the island must also clear the shade entry.
+        IslandNotificationListener.dismiss(key)
+        IslandStateHolder.clearNotification(key)
+    }
+
     override fun onBodyTap() {
         val event = IslandStateHolder.current ?: return
         when (event.source) {
@@ -203,6 +238,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
             IslandSource.Timer -> IslandStateHolder.toggleExpanded()
             IslandSource.Call -> IslandStateHolder.toggleExpanded()
             IslandSource.Download -> IslandStateHolder.toggleExpanded()
+            IslandSource.Clock -> IslandStateHolder.toggleExpanded()
             IslandSource.Navigation -> IslandStateHolder.toggleExpanded()
             // Charging / battery confirmations have no expanded layout.
             else -> Unit
@@ -244,6 +280,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
         val intent = when (val content = IslandStateHolder.current?.content) {
             is IslandContent.Call -> content.contentIntent
             is IslandContent.Download -> content.contentIntent
+            is IslandContent.ClockActivity -> content.contentIntent
             is IslandContent.Navigation -> content.contentIntent
             is IslandContent.Notification -> content.contentIntent
             else -> null
@@ -275,6 +312,13 @@ class IslandService : AccessibilityService(), IslandInteraction {
                 actions = content.actions
                 key = content.key
                 title = content.title
+                contentIntent = content.contentIntent
+                dismissOnAction = false
+            }
+            is IslandContent.ClockActivity -> {
+                actions = content.actions
+                key = content.key
+                title = content.appLabel
                 contentIntent = content.contentIntent
                 dismissOnAction = false
             }
@@ -372,6 +416,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
         overlay = null
 
         unregisterDndReceiver()
+        stopClockTicker()
         runCatching { mediaSource.stop() }
         runCatching { chargingSource.stop() }
         // A rebind (automation, system restart) must not wipe a countdown, so the app-scoped timer

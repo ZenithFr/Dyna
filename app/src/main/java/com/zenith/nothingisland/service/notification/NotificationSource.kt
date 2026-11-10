@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.service.notification.NotificationListenerService.Ranking
 import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
@@ -38,6 +39,9 @@ class NotificationSource(private val context: Context) {
     private val activeKeys = mutableMapOf<String, IslandSource>()
     private val activePackages = mutableMapOf<String, String>()
     private val signatures = mutableMapOf<String, String>()
+    /** Debounces the duplicate removal callback Android delivers for a single dismissal. */
+    private var lastRemovedKey: String? = null
+    private var lastRemovedAtMs = 0L
     private var settings = IslandSettings()
 
     fun updateSettings(next: IslandSettings) {
@@ -51,6 +55,7 @@ class NotificationSource(private val context: Context) {
             activePackages.filterValues { it in PopularIntegrations.clockPackages }.keys.toList().forEach { key ->
                 clearKey(key)
             }
+            IslandStateHolder.clearClock()
         }
         if (!coerced.navigationEnabled) IslandStateHolder.clearNavigation()
         if (coerced.disabledPackages != previous.disabledPackages) {
@@ -63,7 +68,8 @@ class NotificationSource(private val context: Context) {
 
     fun onPosted(sbn: StatusBarNotification, ranking: Ranking?) {
         val notification = sbn.notification ?: return
-        val decision = route(sbn, notification, ranking)
+        val clock = decodeClock(sbn, notification)
+        val decision = route(sbn, notification, ranking, clock != null)
         val source = decision.source
         if (source == null) {
             if (settings.verboseLogging) {
@@ -83,16 +89,26 @@ class NotificationSource(private val context: Context) {
         val icon = if (redact) appIcon(sbn.packageName) else icon(notification, sbn.packageName)
         // Parse once, then dedupe by signature. The previous path built every accepted notification
         // twice (signature pass + post pass), doubling binder/extras work on busy progress updates.
-        val content = when (source) {
+        val content: IslandContent = when (source) {
             IslandSource.Call -> callContent(sbn, notification, appLabel, icon, redact)
             IslandSource.Notification -> notificationContent(sbn, notification, appLabel, icon, redact)
+            IslandSource.Clock ->
+                clockContent(sbn, notification, appLabel, icon, redact, clock)
+                    ?: downloadContent(sbn, notification, appLabel, icon, redact)
             IslandSource.Download -> downloadContent(sbn, notification, appLabel, icon, redact)
             IslandSource.Navigation -> navigationContent(sbn, notification, appLabel, icon, redact)
             else -> return
         }
+        // An undecodable clock notification still shows as a generic activity card.
+        val effectiveSource = if (source == IslandSource.Clock && content !is IslandContent.ClockActivity) {
+            IslandSource.Download
+        } else {
+            source
+        }
         val signature = when (content) {
             is IslandContent.Call -> content.signature()
             is IslandContent.Notification -> content.signature()
+            is IslandContent.ClockActivity -> content.signature()
             is IslandContent.Download -> content.signature()
             is IslandContent.Navigation -> content.signature()
             else -> return
@@ -102,15 +118,16 @@ class NotificationSource(private val context: Context) {
             return
         }
         if (settings.verboseLogging) {
-            Log.d(TAG, "show pkg=${sbn.packageName} source=$source")
+            Log.d(TAG, "show pkg=${sbn.packageName} source=$effectiveSource")
         }
         signatures[sbn.key] = signature
-        activeKeys[sbn.key] = source
+        activeKeys[sbn.key] = effectiveSource
         activePackages[sbn.key] = sbn.packageName
 
         when (content) {
             is IslandContent.Call -> IslandStateHolder.postCall(content, expanded = settings.autoExpandCalls)
             is IslandContent.Notification -> IslandStateHolder.postNotification(content)
+            is IslandContent.ClockActivity -> IslandStateHolder.postClock(content)
             is IslandContent.Download -> IslandStateHolder.postDownload(content)
             is IslandContent.Navigation -> IslandStateHolder.postNavigation(content)
             else -> Unit
@@ -118,12 +135,31 @@ class NotificationSource(private val context: Context) {
     }
 
     /**
-     * Records notifications that were already in the shade when the listener connected, so the
-     * badge count matches the OS from the start. Only message alerts are kept; nothing pops up.
+     * Re-syncs with the shade when the listener connects: drops island alerts the shade no longer
+     * has and restores a running clock card, which only posts once. Notifications already in the
+     * shade are remembered (so their later updates/removals are handled) but never queued: the
+     * island's badge counts alerts that arrive while it is running, not the whole shade history.
      */
     fun seed(active: List<StatusBarNotification>, rankingMap: RankingMap?) {
+        // Anything the island still holds that the shade no longer has is stale: drop it first.
+        IslandStateHolder.reconcile(active.map { it.key }.toSet())
         active.forEach { sbn ->
             val notification = sbn.notification ?: return@forEach
+            // A running timer/stopwatch only posts once: restore it instead of losing the card
+            // whenever the listener reconnects (an app update, a reboot, a permission toggle).
+            val sealed = decodeClock(sbn, notification)
+            if (sealed != null) {
+                val redact = redacts(notification)
+                val icon = if (redact) appIcon(sbn.packageName) else icon(notification, sbn.packageName)
+                val content = clockContent(sbn, notification, appLabel(sbn.packageName), icon, redact, sealed)
+                if (content != null) {
+                    signatures[sbn.key] = content.signature()
+                    activeKeys[sbn.key] = IslandSource.Clock
+                    activePackages[sbn.key] = sbn.packageName
+                    IslandStateHolder.postClock(content)
+                }
+                return@forEach
+            }
             val ranking = Ranking()
             val known = rankingMap?.getRanking(sbn.key, ranking) == true
             if (route(sbn, notification, if (known) ranking else null).source != IslandSource.Notification) {
@@ -135,13 +171,25 @@ class NotificationSource(private val context: Context) {
             signatures[sbn.key] = content.signature()
             activeKeys[sbn.key] = IslandSource.Notification
             activePackages[sbn.key] = sbn.packageName
-            IslandStateHolder.seedNotification(content)
         }
     }
 
     fun onRemoved(sbn: StatusBarNotification?) {
         val key = sbn?.key ?: return
+        // The framework can deliver the same removal through both listener callbacks; clearing is
+        // idempotent, but the duplicate log line makes device verification confusing.
+        val now = SystemClock.elapsedRealtime()
+        if (key == lastRemovedKey && now - lastRemovedAtMs < 250L) return
+        lastRemovedKey = key
+        lastRemovedAtMs = now
+        if (settings.verboseLogging) Log.d(TAG, "removed pkg=${sbn.packageName}")
         clearKey(key)
+        // Also drop it when our bookkeeping never recorded it (a seeded alert, a dropped update):
+        // a message dismissed from the panel must never survive on the island.
+        IslandStateHolder.clearNotification(key)
+        IslandStateHolder.clearClock(key)
+        IslandStateHolder.clearDownload(key)
+        IslandStateHolder.clearNavigation(key)
     }
 
     fun clear() {
@@ -152,6 +200,7 @@ class NotificationSource(private val context: Context) {
         activePackages.clear()
         IslandStateHolder.clearNotification()
         IslandStateHolder.clearCall()
+        IslandStateHolder.clearClock()
         IslandStateHolder.clearDownload()
         IslandStateHolder.clearNavigation()
     }
@@ -164,6 +213,7 @@ class NotificationSource(private val context: Context) {
         when (activeKeys.remove(key)) {
             IslandSource.Call -> IslandStateHolder.clearCall(key)
             IslandSource.Notification -> IslandStateHolder.clearNotification(key)
+            IslandSource.Clock -> IslandStateHolder.clearClock(key)
             IslandSource.Download -> IslandStateHolder.clearDownload(key)
             IslandSource.Navigation -> IslandStateHolder.clearNavigation(key)
             else -> Unit
@@ -177,6 +227,7 @@ class NotificationSource(private val context: Context) {
         sbn: StatusBarNotification,
         notification: Notification,
         ranking: Ranking?,
+        isClockActivity: Boolean = false,
     ): NotificationDecision {
         @Suppress("DEPRECATION")
         val groupSummary = notification.flags and Notification.FLAG_GROUP_SUMMARY != 0
@@ -197,7 +248,7 @@ class NotificationSource(private val context: Context) {
             downloadsEnabled = settings.downloadsEnabled,
             navigationEnabled = settings.navigationEnabled,
             showSilentNotifications = settings.showSilentNotifications,
-            isClockApp = sbn.packageName in PopularIntegrations.clockPackages,
+            isClockActivity = isClockActivity,
             clockEnabled = settings.clockEnabled,
         )
     }
@@ -293,6 +344,36 @@ class NotificationSource(private val context: Context) {
         contentIntent = if (redact) null else notification.contentIntent,
     )
 
+    /**
+     * A running timer or stopwatch from a Clock app. Returns null when the notification carries no
+     * clock state the parser recognises, so the caller can fall back to a generic activity card.
+     */
+    private fun clockContent(
+        sbn: StatusBarNotification,
+        notification: Notification,
+        appLabel: String,
+        icon: Drawable?,
+        redact: Boolean,
+        decoded: ClockParser.Decoded?,
+    ): IslandContent.ClockActivity? {
+        val state = decoded ?: return null
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val content = IslandContent.ClockActivity(
+            key = sbn.key,
+            packageName = sbn.packageName,
+            appLabel = appLabel,
+            icon = icon,
+            kind = state.kind,
+            isRunning = state.running,
+            anchorElapsedMs = state.anchorElapsedMs,
+            frozenMs = state.frozenMs,
+            timeText = "",
+            actions = if (redact) emptyList() else actions(notification, clock = true),
+            contentIntent = if (redact) null else notification.contentIntent,
+        )
+        return content.copy(timeText = content.timeTextAt(nowElapsed))
+    }
+
     private fun navigationContent(
         sbn: StatusBarNotification,
         notification: Notification,
@@ -328,6 +409,35 @@ class NotificationSource(private val context: Context) {
         val value = notification.extras?.getCharSequence(key)?.toString()?.trim()
         return value?.takeIf { it.isNotEmpty() }
     }
+
+    /** The clock state this notification carries, or null when it is not a running clock card. */
+    private fun decodeClock(
+        sbn: StatusBarNotification,
+        notification: Notification,
+    ): ClockParser.Decoded? {
+        if (sbn.packageName !in PopularIntegrations.clockPackages) return null
+        val extras = notification.extras ?: return null
+        return ClockParser.decode(
+            ClockParser.Input(
+                sortKey = sortKeyOf(notification),
+                title = text(notification, Notification.EXTRA_TITLE),
+                text = text(notification, Notification.EXTRA_TEXT),
+                showChronometer = extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER, false),
+                chronometerCountDown = extras.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN, false),
+                whenWallMs = notification.`when`,
+                postTimeWallMs = sbn.postTime,
+                nowWallMs = System.currentTimeMillis(),
+                nowElapsedMs = SystemClock.elapsedRealtime(),
+            ),
+        )
+    }
+
+    /**
+     * The notification's sort key, which Clock apps use to carry their live timer/stopwatch state.
+     * [Notification.getSortKey] is public SDK, so this needs no reflection.
+     */
+    private fun sortKeyOf(notification: Notification): String? =
+        runCatching { notification.sortKey }.getOrNull()
 
     private fun isClock(sbn: StatusBarNotification): Boolean =
         sbn.packageName in PopularIntegrations.clockPackages
@@ -413,6 +523,17 @@ class NotificationSource(private val context: Context) {
 
     private fun IslandContent.Notification.signature(): String =
         listOf(key, title, text, actions.joinToString("|") { it.title }).joinToString("\u0000")
+
+    /** A clock card re-posts with a re-anchored deadline, so the anchor belongs in the signature. */
+    private fun IslandContent.ClockActivity.signature(): String =
+        listOf(
+            key,
+            kind,
+            isRunning,
+            anchorElapsedMs / 1_000L,
+            frozenMs / 1_000L,
+            actions.joinToString("|") { it.title },
+        ).joinToString("\u0000")
 
     private fun IslandContent.Download.signature(): String =
         listOf(key, title, text, actions.joinToString("|") { it.title }).joinToString("\u0000")

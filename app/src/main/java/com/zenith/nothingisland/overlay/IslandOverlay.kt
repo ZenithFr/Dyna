@@ -759,6 +759,7 @@ class IslandOverlay(private val serviceContext: Context) {
                     IslandLayout.NOTIFICATION_ACTIONS_HEIGHT_DP
                 }
                 is IslandContent.Call -> IslandLayout.CALL_CONTENT_HEIGHT_DP
+                is IslandContent.ClockActivity -> IslandLayout.DOWNLOAD_CONTENT_HEIGHT_DP
                 is IslandContent.Download -> IslandLayout.DOWNLOAD_CONTENT_HEIGHT_DP
                 is IslandContent.Navigation -> IslandLayout.NAVIGATION_CONTENT_HEIGHT_DP
                 // Battery/charging confirmations have no expanded presentation.

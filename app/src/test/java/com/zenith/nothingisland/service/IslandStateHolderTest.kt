@@ -34,6 +34,16 @@ class IslandStateHolderTest {
         positionMs = 0L, durationMs = 0L, positionUpdatedAtElapsedMs = 0L, speed = 1f,
     )
 
+    private fun clock(
+        kind: ClockKind = ClockKind.Timer,
+        anchorElapsedMs: Long = 60_000L,
+        key: String = "clock",
+    ) = IslandContent.ClockActivity(
+        key = key, packageName = "com.google.android.deskclock", appLabel = "Clock", icon = null,
+        kind = kind, isRunning = true, anchorElapsedMs = anchorElapsedMs, frozenMs = 0L,
+        timeText = "", actions = emptyList(), contentIntent = null,
+    )
+
     private fun timer(remaining: Long = 60_000L) = IslandContent.Timer("TIMER", remaining, true, 0L)
 
     private fun notification(key: String) = IslandContent.Notification(
@@ -54,35 +64,37 @@ class IslandStateHolderTest {
         runCurrent()
         assertEquals("a", shownKey())
 
+        // Each queued alert gets exactly one turn; once a message has been on screen it leaves
+        // the queue, so it can never come back behind a later post.
         advanceTimeBy(IslandStateHolder.TRANSIENT_DURATION_MS)
         runCurrent()
-        assertEquals("b", shownKey())
-
-        IslandStateHolder.clearNotification("a")
-        assertEquals(1, (IslandStateHolder.current?.content as IslandContent.Notification).stackCount)
-        // The last alert keeps rotating until it is dismissed as well.
-        advanceTimeBy(IslandStateHolder.TRANSIENT_DURATION_MS)
-        runCurrent()
-        assertEquals("b", shownKey())
-
-        IslandStateHolder.clearNotification("b")
         assertNull(IslandStateHolder.current)
     }
+
+    @Test
+    fun aFinishedAlertDoesNotFollowTheNextPost() = runTest {
+        IslandStateHolder.postNotification(notification("old"))
+        advanceTimeBy(IslandStateHolder.TRANSIENT_DURATION_MS)
+        runCurrent()
+        assertNull(IslandStateHolder.current)
+
+        IslandStateHolder.postNotification(notification("new"))
+        val shown = IslandStateHolder.current?.content as IslandContent.Notification
+        assertEquals("new", shown.key)
+        assertEquals(1, shown.stackCount)
+        advanceTimeBy(IslandStateHolder.TRANSIENT_DURATION_MS)
+        runCurrent()
+        assertNull(IslandStateHolder.current)
+    }
+
 
     @Test
     fun dismissingAQueuedAlertKeepsTheShownOneVisibleAndRecountsIt() = runTest {
-        IslandStateHolder.seedNotification(notification("seeded"))
         IslandStateHolder.postNotification(notification("a"))
-        IslandStateHolder.clearNotification("seeded")
-        assertEquals("a", shownKey())
+        IslandStateHolder.postNotification(notification("b"))
+        IslandStateHolder.clearNotification("a")
+        assertEquals("b", shownKey())
         assertEquals(1, (IslandStateHolder.current?.content as IslandContent.Notification).stackCount)
-    }
-
-    @Test
-    fun seededAlertsNeverPopUpOnTheirOwn() = runTest {
-        IslandStateHolder.seedNotification(notification("old-1"))
-        IslandStateHolder.seedNotification(notification("old-2"))
-        assertNull(IslandStateHolder.current)
     }
 
     @Test
@@ -238,5 +250,73 @@ class IslandStateHolderTest {
                 powerSaveMs = IslandStateHolder.TRANSIENT_DURATION_MS,
             )
         }
+    }
+
+    @Test
+    fun aClockTimerTicksUntilItsDeadlineThenHandsBack() = runTest {
+        IslandStateHolder.postMedia(media())
+        IslandStateHolder.postClock(clock(anchorElapsedMs = 3_000L))
+        assertEquals(IslandSource.Clock, IslandStateHolder.current?.source)
+
+        IslandStateHolder.tickClock(1_000L)
+        val shown = IslandStateHolder.current?.content as IslandContent.ClockActivity
+        assertEquals("00:02", shown.timeText)
+
+        IslandStateHolder.tickClock(3_000L)
+        assertEquals(IslandSource.Media, IslandStateHolder.current?.source)
+    }
+
+    @Test
+    fun theInAppTimerOutranksTheMirroredClock() = runTest {
+        IslandStateHolder.postClock(clock())
+        IslandStateHolder.postTimer(timer())
+        assertEquals(IslandSource.Timer, IslandStateHolder.current?.source)
+        IslandStateHolder.clearTimer()
+        assertEquals(IslandSource.Clock, IslandStateHolder.current?.source)
+    }
+
+    @Test
+    fun dismissingTheClockOnlyClearsThatNotification() = runTest {
+        IslandStateHolder.postClock(clock())
+        IslandStateHolder.clearClock("someone-else")
+        assertEquals(IslandSource.Clock, IslandStateHolder.current?.source)
+        IslandStateHolder.clearClock("clock")
+        assertNull(IslandStateHolder.current)
+    }
+
+    @Test
+    fun reconcileDropsADismissedAlertInTheShade() = runTest {
+        IslandStateHolder.postNotification(notification("a"))
+        IslandStateHolder.postNotification(notification("b"))
+        assertEquals("b", shownKey())
+
+        // "b" was dismissed from the system panel: the island moves to the alert still in the shade.
+        IslandStateHolder.reconcile(setOf("a"))
+        assertEquals("a", shownKey())
+        assertEquals(1, (IslandStateHolder.current?.content as IslandContent.Notification).stackCount)
+
+        IslandStateHolder.reconcile(emptySet())
+        assertNull(IslandStateHolder.current)
+    }
+
+    @Test
+    fun reconcileDropsAClockWhoseNotificationLeftTheShade() = runTest {
+        IslandStateHolder.postClock(clock(key = "clock"))
+        IslandStateHolder.postMedia(media())
+        assertEquals(IslandSource.Clock, IslandStateHolder.current?.source)
+
+        IslandStateHolder.reconcile(setOf("unrelated"))
+        assertEquals(IslandSource.Media, IslandStateHolder.current?.source)
+    }
+
+    @Test
+    fun reconcileKeepsEverythingTheShadeStillHas() = runTest {
+        IslandStateHolder.postClock(clock(key = "clock"))
+        IslandStateHolder.reconcile(setOf("clock"))
+        assertEquals(IslandSource.Clock, IslandStateHolder.current?.source)
+
+        IslandStateHolder.postNotification(notification("a"))
+        IslandStateHolder.reconcile(setOf("clock", "a"))
+        assertEquals("a", shownKey())
     }
 }

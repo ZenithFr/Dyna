@@ -145,5 +145,19 @@ class IslandNotificationListener : NotificationListenerService() {
         /** Actual bind state in this process, not merely the user's notification-access grant. */
         val isConnected: Boolean
             get() = connectedInstance != null
+
+        /**
+         * Cancels a notification from the shade, so dismissing a message on the island leaves the
+         * OS state identical. Returns false when the listener is not bound (the island still clears).
+         */
+        fun dismiss(key: String): Boolean {
+            val listener = connectedInstance ?: run {
+                Log.w(TAG, "dismiss without a bound listener: $key")
+                return false
+            }
+            return runCatching { listener.cancelNotification(key) }
+                .onFailure { Log.w(TAG, "cancel failed for $key", it) }
+                .isSuccess
+        }
     }
 }

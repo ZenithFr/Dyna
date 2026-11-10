@@ -26,18 +26,6 @@ class AlertStackTest {
         assertEquals("a", stack.nextKey("b"))
     }
 
-    @Test
-    fun seededAlertsCountTowardTheBadgeButDoNotRotateUntilANewPost() {
-        val stack = AlertStack<String>()
-        stack.seed("a", "A")
-        stack.seed("b", "B")
-        stack.seed("c", "C")
-        assertEquals(3, stack.size)
-        assertFalse(stack.rotating)
-        stack.upsert("d", "D")
-        assertTrue(stack.rotating)
-        assertEquals(4, stack.size)
-    }
 
     @Test
     fun rotationContinuesUntilTheLastAlertIsDismissed() {
@@ -75,4 +63,31 @@ class AlertStackTest {
         assertEquals("A2", stack.get("a"))
         assertEquals("a", stack.nextKey("b"))
     }
+
+    @Test
+    fun retainDropsOnlyAlertsTheShadeNoLongerHas() {
+        val stack = AlertStack<String>()
+        stack.upsert("a", "A")
+        stack.upsert("b", "B")
+        stack.upsert("c", "C")
+        assertEquals(1, stack.retain(setOf("a", "c")))
+        assertEquals(2, stack.size)
+        assertNull(stack.get("b"))
+        // Arrival order survives, so the island still rotates a -> c.
+        assertEquals("c", stack.nextKey("a"))
+        assertTrue(stack.rotating)
+    }
+
+    @Test
+    fun retainEmptyingTheQueueEndsRotation() {
+        val stack = AlertStack<String>()
+        stack.upsert("a", "A")
+        stack.upsert("b", "B")
+        assertEquals(2, stack.retain(emptySet()))
+        assertTrue(stack.isEmpty())
+        assertFalse(stack.rotating)
+        assertEquals(0, stack.retain(emptySet()))
+    }
+
+
 }

@@ -15,6 +15,9 @@ interface IslandInteraction {
     /** Expanded timer: cancel the countdown and clear the pill. */
     fun onTimerStop()
 
+    /** An expanded message was swiped away: dismiss it from the island and from the shade. */
+    fun onNotificationDismiss()
+
     fun onCallAnswer()
     fun onCallDecline()
     fun onCallEnd()

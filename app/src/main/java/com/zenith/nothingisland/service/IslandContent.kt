@@ -12,15 +12,33 @@ import java.util.Locale
  * is playing and then collapse back to it.
  */
 enum class IslandSource(val priority: Int) {
-    Call(9),
-    Notification(8),
-    Charging(7),
-    BatteryLow(6),
-    PowerSave(5),
-    Timer(4),
+    Call(10),
+    Notification(9),
+    Charging(8),
+    BatteryLow(7),
+    PowerSave(6),
+    Timer(5),
+    Clock(4),
     Navigation(3),
     Download(2),
     Media(1),
+}
+
+/** Which clock activity an ongoing Clock notification belongs to. */
+enum class ClockKind { Timer, Stopwatch }
+
+/**
+ * `mm:ss`, or `h:mm:ss` past an hour. [roundUp] keeps a running countdown off 00:00 until it is
+ * actually done; counts that only grow are truncated instead.
+ */
+internal fun formatClockDuration(ms: Long, roundUp: Boolean): String {
+    val safe = ms.coerceAtLeast(0L)
+    val seconds = if (roundUp) (safe + 999L) / 1000L else safe / 1000L
+    val h = seconds / 3600L
+    val m = (seconds % 3600L) / 60L
+    val s = seconds % 60L
+    return if (h > 0L) "%d:%02d:%02d".format(Locale.US, h, m, s)
+    else "%02d:%02d".format(Locale.US, m, s)
 }
 
 /** A single thing the island can show. Content classes are immutable snapshots. */
@@ -126,6 +144,41 @@ sealed interface IslandContent {
         val contentIntent: PendingIntent?,
     ) : IslandContent
 
+    /**
+     * A clock timer or stopwatch mirrored from the Clock app's ongoing notification. It is a
+     * persistent base source, so it stays up until the countdown ends or the user dismisses it,
+     * unlike a message alert. [timeText] is a snapshot refreshed once a second by
+     * [IslandStateHolder.tickClock]; the island never polls the Clock app itself.
+     */
+    data class ClockActivity(
+        val key: String,
+        val packageName: String,
+        val appLabel: String,
+        val icon: Drawable?,
+        val kind: ClockKind,
+        val isRunning: Boolean,
+        /** Countdown: the elapsed-realtime deadline. Stopwatch: the elapsed-realtime start. */
+        val anchorElapsedMs: Long,
+        /** Frozen countdown/elapsed time while paused; ignored while running. */
+        val frozenMs: Long,
+        val timeText: String,
+        val actions: List<NotificationAction>,
+        val contentIntent: PendingIntent?,
+    ) : IslandContent {
+
+        /** True once a countdown has reached its deadline. */
+        fun isFinished(nowElapsedMs: Long): Boolean =
+            kind == ClockKind.Timer && nowElapsedMs >= anchorElapsedMs
+
+        /** The time this card should read [nowElapsedMs] later. */
+        fun timeTextAt(nowElapsedMs: Long): String = when {
+            !isRunning -> formatClockDuration(frozenMs, roundUp = kind == ClockKind.Timer)
+            kind == ClockKind.Timer ->
+                formatClockDuration(anchorElapsedMs - nowElapsedMs, roundUp = true)
+            else -> formatClockDuration(nowElapsedMs - anchorElapsedMs, roundUp = false)
+        }
+    }
+
     /** Turn-by-turn / navigation status from a maps notification. */
     data class Navigation(
         val key: String,
@@ -150,14 +203,7 @@ sealed interface IslandContent {
          * before it is actually done. At zero (completion / stopped) it is exactly 00:00.
          */
         val displayTime: String
-            get() {
-                val seconds = (remainingMs.coerceAtLeast(0L) + 999L) / 1000L
-                val h = seconds / 3600L
-                val m = (seconds % 3600L) / 60L
-                val s = seconds % 60L
-                return if (h > 0L) "%d:%02d:%02d".format(Locale.US, h, m, s)
-                else "%02d:%02d".format(Locale.US, m, s)
-            }
+            get() = formatClockDuration(remainingMs, roundUp = true)
     }
 }
 

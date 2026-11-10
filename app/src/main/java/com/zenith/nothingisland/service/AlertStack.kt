@@ -6,10 +6,9 @@ package com.zenith.nothingisland.service
  * whether the island is rotating through several of them.
  *
  * - [upsert] adds or refreshes an alert and moves it to the end of arrival order.
- * - [seed] records an alert that was already in the shade when the listener connected. It counts
- *   toward the badge but never starts a rotation or a popup.
- * - Rotation starts when a *new* post arrives while more than one alert is queued, and it continues
- *   until the queue is empty, so the island keeps cycling until the last message is dismissed.
+ * - Rotation starts when a *new* post arrives while more than one alert is queued, and each alert
+ *   gets exactly one turn: [IslandStateHolder] drops it once its hold ends, so a message that was
+ *   already seen never comes back behind the next post.
  */
 class AlertStack<T> {
     private val items = LinkedHashMap<String, T>()
@@ -30,15 +29,22 @@ class AlertStack<T> {
         if (items.size > 1) rotating = true
     }
 
-    fun seed(key: String, value: T) {
-        if (!items.containsKey(key)) items[key] = value
-    }
-
     /** Returns true when the alert was queued. Emptying the queue ends any rotation. */
     fun remove(key: String): Boolean {
         val removed = items.remove(key) != null
         if (items.isEmpty()) rotating = false
         return removed
+    }
+
+    /**
+     * Drops every alert the shade no longer has, keeping arrival order for the rest. Returns how
+     * many were dropped; emptying the queue ends any rotation.
+     */
+    fun retain(liveKeys: Set<String>): Int {
+        val before = items.size
+        items.keys.retainAll(liveKeys)
+        if (items.isEmpty()) rotating = false
+        return before - items.size
     }
 
     fun clear() {
@@ -51,8 +57,8 @@ class AlertStack<T> {
      * [current] (for example one that was just dismissed) yields the first alert.
      */
     fun nextKey(current: String?): String? {
-        if (items.isEmpty()) return null
         val keys = items.keys.toList()
+        if (keys.isEmpty()) return null
         val index = if (current == null) -1 else keys.indexOf(current)
         return keys[(index + 1) % keys.size]
     }

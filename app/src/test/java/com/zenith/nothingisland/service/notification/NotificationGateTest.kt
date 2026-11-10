@@ -28,7 +28,7 @@ class NotificationGateTest {
         downloadsEnabled: Boolean = true,
         navigationEnabled: Boolean = true,
         showSilentNotifications: Boolean = true,
-        isClockApp: Boolean = false,
+        isClockActivity: Boolean = false,
         clockEnabled: Boolean = true,
     ) = NotificationGate.decide(
         packageName = packageName,
@@ -47,7 +47,7 @@ class NotificationGateTest {
         downloadsEnabled = downloadsEnabled,
         navigationEnabled = navigationEnabled,
         showSilentNotifications = showSilentNotifications,
-        isClockApp = isClockApp,
+        isClockActivity = isClockActivity,
         clockEnabled = clockEnabled,
     )
 
@@ -178,16 +178,16 @@ class NotificationGateTest {
     fun clockTimersAndStopwatchAreActivitiesThatCanBeTurnedOff() {
         val clock = "com.google.android.deskclock"
         assertShown(
-            IslandSource.Download,
-            decide(packageName = clock, category = null, isOngoing = true, isClockApp = true),
+            IslandSource.Clock,
+            decide(packageName = clock, category = null, isOngoing = false, isClockActivity = true),
         )
         assertDropped(
             NotificationDrop.CLOCK_OFF,
             decide(
                 packageName = clock,
                 category = null,
-                isOngoing = true,
-                isClockApp = true,
+                isOngoing = false,
+                isClockActivity = true,
                 clockEnabled = false,
             ),
         )
@@ -201,7 +201,7 @@ class NotificationGateTest {
                 packageName = "com.android.deskclock",
                 category = NotificationGate.CATEGORY_ALARM,
                 isOngoing = false,
-                isClockApp = true,
+                isClockActivity = false,
             ),
         )
     }

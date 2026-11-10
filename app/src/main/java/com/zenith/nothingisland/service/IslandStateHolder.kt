@@ -34,6 +34,7 @@ object IslandStateHolder {
     private var batteryLow: IslandEvent? = null
     private var powerSave: IslandEvent? = null
     private var timer: IslandEvent? = null
+    private var clock: IslandEvent? = null
     private var navigation: IslandEvent? = null
     private var download: IslandEvent? = null
     private var media: IslandEvent? = null
@@ -106,15 +107,6 @@ object IslandStateHolder {
     fun postNotification(content: IslandContent.Notification) {
         notificationAlerts.upsert(content.key, content)
         showNotificationLocked(content.key, bubble = true)
-    }
-
-    /**
-     * Records an alert that was already in the shade when the listener connected. It only feeds
-     * the count; it never pops up or starts a rotation.
-     */
-    @Synchronized
-    fun seedNotification(content: IslandContent.Notification) {
-        notificationAlerts.seed(content.key, content)
     }
 
     /** [key] = a dismissed or handled alert; null = the whole queue (service stop, feature off). */
@@ -204,8 +196,40 @@ object IslandStateHolder {
     }
 
     @Synchronized
-    fun postNavigation(content: IslandContent.Navigation) {
-        navigation = IslandEvent(IslandSource.Navigation, content, expanded = navigation?.expanded == true)
+    fun postClock(content: IslandContent.ClockActivity) {
+        clock = IslandEvent(IslandSource.Clock, content, expanded = clock?.expanded == true)
+        publishLocked()
+    }
+
+    @Synchronized
+    fun clearClock(key: String? = null) {
+        val shown = clock ?: return
+        if (key != null && (shown.content as? IslandContent.ClockActivity)?.key != key) return
+        clock = null
+        publishLocked()
+    }
+
+    /**
+     * Refreshes the mirrored clock card once a second. A countdown that reached its deadline
+     * retracts here; the Clock app posts its own "time's up" alert at the same moment.
+     */
+    @Synchronized
+    fun tickClock(nowElapsedMs: Long) {
+        val shown = clock ?: return
+        val content = shown.content as? IslandContent.ClockActivity ?: return
+        if (content.isFinished(nowElapsedMs)) {
+            clock = null
+            publishLocked()
+            return
+        }
+        val text = content.timeTextAt(nowElapsedMs)
+        if (text == content.timeText) return
+        clock = shown.copy(content = content.copy(timeText = text))
+        publishLocked()
+    }
+
+    @Synchronized
+    fun postNavigation(content: IslandContent.Navigation) {        navigation = IslandEvent(IslandSource.Navigation, content, expanded = navigation?.expanded == true)
         publishLocked()
     }
 
@@ -257,6 +281,7 @@ object IslandStateHolder {
         notificationAlerts.clear()
         call = null
         timer = null
+        clock = null
         navigation = null
         download = null
         media = null
@@ -274,6 +299,7 @@ object IslandStateHolder {
             IslandSource.Call -> call = event.copy(expanded = !event.expanded)
             IslandSource.Timer -> timer = event.copy(expanded = !event.expanded)
             IslandSource.Media -> media = event.copy(expanded = !event.expanded)
+            IslandSource.Clock -> clock = event.copy(expanded = !event.expanded)
             IslandSource.Navigation -> navigation = event.copy(expanded = !event.expanded)
             IslandSource.Download -> download = event.copy(expanded = !event.expanded)
             IslandSource.Charging, IslandSource.BatteryLow, IslandSource.PowerSave -> Unit
@@ -286,10 +312,48 @@ object IslandStateHolder {
         call?.let { if (it.expanded) call = it.copy(expanded = false) }
         notification?.let { if (it.expanded) notification = it.copy(expanded = false) }
         timer?.let { if (it.expanded) timer = it.copy(expanded = false) }
+        clock?.let { if (it.expanded) clock = it.copy(expanded = false) }
         navigation?.let { if (it.expanded) navigation = it.copy(expanded = false) }
         download?.let { if (it.expanded) download = it.copy(expanded = false) }
         media?.let { if (it.expanded) media = it.copy(expanded = false) }
         publishLocked()
+    }
+
+    /**
+     * Drops island alerts and activities the notification shade no longer has. Removal events can
+     * be missed — the listener reconnects after an update, or an app cancels while the overlay is
+     * stopped — so the listener reconciles against the real shade instead of trusting the stream.
+     */
+    @Synchronized
+    fun reconcile(liveKeys: Set<String>) {
+        if (notificationAlerts.retain(liveKeys) > 0) {
+            val shownKey = (notification?.content as? IslandContent.Notification)?.key
+            when {
+                notificationAlerts.isEmpty() -> hideNotificationLocked()
+                shownKey != null && shownKey !in liveKeys -> {
+                    val next = notificationAlerts.nextKey(shownKey)
+                    if (next == null) hideNotificationLocked() else showNotificationLocked(next, bubble = false)
+                }
+                else -> refreshNotificationCountLocked()
+            }
+        }
+        var changed = false
+        val shownClock = (clock?.content as? IslandContent.ClockActivity)?.key
+        if (shownClock != null && shownClock !in liveKeys) {
+            clock = null
+            changed = true
+        }
+        val shownDownload = (download?.content as? IslandContent.Download)?.key
+        if (shownDownload != null && shownDownload !in liveKeys) {
+            download = null
+            changed = true
+        }
+        val shownNavigation = (navigation?.content as? IslandContent.Navigation)?.key
+        if (shownNavigation != null && shownNavigation !in liveKeys) {
+            navigation = null
+            changed = true
+        }
+        if (changed) publishLocked()
     }
 
     /** Shows [key] from the queue. [bubble] = the app-icon bubble detaches again for this alert. */
@@ -341,20 +405,19 @@ object IslandStateHolder {
         }
     }
 
-    /** The hold ran out: rotate to the next queued alert, or retract the alert once it is alone. */
+    /**
+     * The hold ran out: the alert has had its turn, so it leaves the rotation. The system
+     * notification itself stays in the shade untouched; keeping finished alerts queued is what
+     * made an already-seen message reappear behind the next post.
+     */
     private fun advanceNotificationLocked() {
-        if (!notificationAlerts.rotating) {
+        val finishedKey = (notification?.content as? IslandContent.Notification)?.key
+        if (finishedKey != null) notificationAlerts.remove(finishedKey)
+        val next = notificationAlerts.nextKey(finishedKey)
+        if (next == null) {
             hideNotificationLocked()
-            return
-        }
-        val currentKey = (notification?.content as? IslandContent.Notification)?.key
-        val next = notificationAlerts.nextKey(currentKey)
-        when {
-            next == null -> hideNotificationLocked()
-            // The last queued alert keeps the island until it is dismissed, but it must not re-arm
-            // its own timeout: re-showing itself every hold would publish forever.
-            next == currentKey -> notificationJob = null
-            else -> showNotificationLocked(next, bubble = true)
+        } else {
+            showNotificationLocked(next, bubble = true)
         }
     }
 
@@ -410,7 +473,7 @@ object IslandStateHolder {
 
     private fun publishLocked() {
         val alert = call ?: notification ?: charging ?: batteryLow ?: powerSave
-        val base = timer ?: navigation ?: download ?: media
+        val base = timer ?: clock ?: navigation ?: download ?: media
         _state.value = alert ?: base
     }
 }

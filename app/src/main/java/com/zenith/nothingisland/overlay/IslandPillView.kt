@@ -26,6 +26,7 @@ import com.zenith.nothingisland.data.IslandSettings
 import com.zenith.nothingisland.data.IslandTapAction
 import com.zenith.nothingisland.data.IslandShape
 import com.zenith.nothingisland.data.buildIslandPath
+import com.zenith.nothingisland.service.ClockKind
 import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandEvent
 import kotlin.math.abs
@@ -258,6 +259,21 @@ internal class IslandPillView(context: Context) : View(context) {
     private var downX = 0f
     private var downY = 0f
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+
+    /** Horizontal swipe-to-dismiss on an expanded message alert. */
+    private var swipeCandidate = false
+    private var swipeDragging = false
+    private var swipeOffsetPx = 0f
+    private var swipeStartX = 0f
+    private var swipeSettling = false
+    private var swipeSettleFrom = 0f
+    private var swipeSettleStartMs = 0L
+    private val swipeDismissThresholdPx get() = dp(72f)
+
+    /** Expanded clock roll: the previous time is still sliding out while the new one drops in. */
+    private var clockRollFrom: String? = null
+    private var clockRollStartMs = 0L
+    private var clockRollRunning = false
     private val targets = mutableListOf<Target>()
     private val animatedFrame = RectF()
     private var motionAllowed = true
@@ -494,12 +510,31 @@ internal class IslandPillView(context: Context) : View(context) {
             revealAnimating = false
         }
 
+        // A countdown/stopwatch card re-renders once a second. Keep the outgoing text so the
+        // expanded card can roll the changed digits instead of hard-cutting the whole row.
+        val previousClock = content as? IslandContent.ClockActivity
+        val nextClock = newContent as? IslandContent.ClockActivity
+        clockRollRunning = false
+        clockRollFrom = null
+        if (motionAllowed && newExpanded && previousClock != null && nextClock != null &&
+            previousClock.key == nextClock.key && previousClock.timeText != nextClock.timeText
+        ) {
+            clockRollFrom = previousClock.timeText
+            clockRollStartMs = SystemClock.elapsedRealtime()
+            clockRollRunning = true
+        }
+
         // The island swaps activity while already settled (timer -> notification, ...): crossfade
         // the old card out instead of hard-cutting, the way a system activity update reads.
         val oldKey = contentKey(content)
         val newKey = contentKey(newContent)
         if (oldKey != newKey || expanded != newExpanded) {
             cancelTouch()
+            // A swipe belongs to the alert it started on; a different card must not inherit it.
+            swipeDragging = false
+            swipeCandidate = false
+            swipeSettling = false
+            swipeOffsetPx = 0f
             accessibilityRevision++
         }
         if (motionAllowed && oldKey != null && newKey != null && oldKey != newKey &&
@@ -598,6 +633,7 @@ internal class IslandPillView(context: Context) : View(context) {
         is IslandContent.Call -> "call:${value.key}"
         is IslandContent.Download -> "download:${value.key}"
         is IslandContent.Navigation -> "navigation:${value.key}:${value.instruction}"
+        is IslandContent.ClockActivity -> "clock:${value.key}:${value.kind}:${value.isRunning}"
         is IslandContent.Timer -> "timer"
     }
 
@@ -614,6 +650,24 @@ internal class IslandPillView(context: Context) : View(context) {
 
         val now = SystemClock.elapsedRealtime()
         if (springActive || dormantSettling || satelliteActive) advanceMotion(now)
+        if (clockRollRunning &&
+            (now - clockRollStartMs) >= CLOCK_ROLL_MS
+        ) {
+            clockRollRunning = false
+            clockRollFrom = null
+        } else if (clockRollRunning) {
+            postInvalidateOnAnimation()
+        }
+        if (!swipeDragging && swipeSettling) {
+            val t = ((now - swipeSettleStartMs) / SWIPE_SETTLE_MS.toFloat()).coerceIn(0f, 1f)
+            swipeOffsetPx = swipeSettleFrom * (1f - easeOutCubic(t))
+            if (t >= 1f) {
+                swipeSettling = false
+                swipeOffsetPx = 0f
+            } else {
+                postInvalidateOnAnimation()
+            }
+        }
         val p = progress.coerceIn(0f, 1f)
         val widthCage = dormantWidthCage(dormantProgress)
         val frame = currentFrame()
@@ -706,7 +760,7 @@ internal class IslandPillView(context: Context) : View(context) {
             (now - revealStartMs) < REVEAL_TOTAL_MS
         if (revealAnimating && !revealRunning) revealAnimating = false
         val busy = animating || springActive || dormantSettling || satelliteActive ||
-            revealRunning || swapAnimating || satelliteSwapAnimating
+            revealRunning || swapAnimating || satelliteSwapAnimating || clockRollRunning
         val ambientOnly = animating && !springActive && !dormantSettling &&
             !satelliteActive && !revealRunning && !swapAnimating && !satelliteSwapAnimating
         requestMotionRate(busy, ambientOnly)
@@ -764,13 +818,18 @@ internal class IslandPillView(context: Context) : View(context) {
     ) {
         val firstTarget = targets.size
         val save = canvas.save()
-        if (alpha < 0.999f) {
+        // Swipe-to-dismiss moves the message card out from under the shell, fading as it goes.
+        val swipe = if (current is IslandContent.Notification) swipeOffsetPx else 0f
+        val swipeFade = if (swipe == 0f) 1f else
+            (1f - 0.55f * (abs(swipe) / swipeDismissThresholdPx).coerceIn(0f, 1f))
+        if (alpha < 0.999f || swipeFade < 0.999f) {
             // Bound the offscreen layer to the card, not the whole morph envelope.
             canvas.saveLayerAlpha(
                 frame.left, frame.top + risePx, frame.right, frame.bottom + risePx,
-                (alpha * 255f).toInt().coerceIn(0, 255),
+                (alpha * swipeFade * 255f).toInt().coerceIn(0, 255),
             )
         }
+        if (swipe != 0f) canvas.translate(swipe, 0f)
         if (scale != 1f) canvas.scale(scale, scale, frame.centerX(), frame.centerY())
         if (risePx != 0f) canvas.translate(0f, risePx)
         canvas.translate(frame.left, frame.top)
@@ -829,6 +888,13 @@ internal class IslandPillView(context: Context) : View(context) {
                     drawTimerExpanded(canvas, current)
                 } else {
                     drawTimerCompact(canvas, current, areas, heightPx)
+                }
+
+            is IslandContent.ClockActivity ->
+                if (expandedVariant) {
+                    drawClockExpanded(canvas, current)
+                } else {
+                    drawClockCompact(canvas, current, areas, heightPx)
                 }
         }
         canvas.restoreToCount(save)
@@ -1041,7 +1107,9 @@ internal class IslandPillView(context: Context) : View(context) {
     private fun iconKind(value: IslandContent?): IslandIconKind = when (value) {
         is IslandContent.Notification, is IslandContent.Call -> IslandIconKind.ALERT
         is IslandContent.Download, is IslandContent.Navigation -> IslandIconKind.ACTIVITY_ICON
-        is IslandContent.Media, is IslandContent.Timer -> IslandIconKind.ACTIVITY_ART
+        // The clock card carries its own timer/stopwatch glyph, so it is content, not identity.
+        is IslandContent.Media, is IslandContent.Timer,
+        is IslandContent.ClockActivity -> IslandIconKind.ACTIVITY_ART
         else -> IslandIconKind.NONE
     }
 
@@ -1066,6 +1134,8 @@ internal class IslandPillView(context: Context) : View(context) {
             is IslandContent.Timer -> timerAppIcon()
             is IslandContent.Navigation -> value.icon
             is IslandContent.Download -> value.icon
+            // A countdown's own glyph already says "timer", so the Clock app icon never detaches.
+            is IslandContent.ClockActivity -> null
             is IslandContent.Notification -> if (value.showBubble) value.icon else null
             is IslandContent.Call -> value.icon
             else -> null
@@ -1685,6 +1755,169 @@ internal class IslandPillView(context: Context) : View(context) {
         }
     }
 
+    /**
+     * Compact clock card: the same glyph-plus-time row as the in-app timer, so a countdown from the
+     * Clock app reads exactly like one the island started itself.
+     */
+    private fun drawClockCompact(
+        canvas: Canvas,
+        clock: IslandContent.ClockActivity,
+        areas: Areas,
+        heightPx: Float,
+    ) {
+        val paused = !clock.isRunning
+        chargingPaint.textSize = sp(13f)
+        chargingPaint.color = customization.timerColorArgb
+        if (areas.split) {
+            val left = areas.left!!
+            canvas.inArea(left) {
+                drawClockGlyph(canvas, left.centerX(), heightPx / 2f, compactGlyphSize(left, 15f), clock.kind, paused)
+            }
+            canvas.inArea(areas.right!!) {
+                val text = clock.timeText
+                val width = chargingPaint.measureText(text)
+                val scale = (areas.right.width() / width.coerceAtLeast(1f)).coerceAtMost(1f)
+                canvas.save()
+                canvas.scale(scale, scale, areas.right.centerX(), heightPx / 2f)
+                val baseline = heightPx / 2f - (chargingPaint.descent() + chargingPaint.ascent()) / 2f
+                canvas.drawText(text, areas.right.centerX() - width / 2f, baseline, chargingPaint)
+                canvas.restore()
+            }
+        } else {
+            val area = areas.single
+            canvas.inArea(area) {
+                val glyph = dp(15f)
+                val gap = dp(6f)
+                val text = clock.timeText
+                val width = chargingPaint.measureText(text)
+                val total = glyph + gap + width
+                val scale = (area.width() / total.coerceAtLeast(1f)).coerceAtMost(1f)
+                canvas.save()
+                canvas.translate(area.centerX(), heightPx / 2f)
+                canvas.scale(scale, scale)
+                drawClockGlyph(canvas, -total / 2f + glyph / 2f, 0f, glyph, clock.kind, paused)
+                val baseline = -(chargingPaint.descent() + chargingPaint.ascent()) / 2f
+                canvas.drawText(text, -total / 2f + glyph + gap, baseline, chargingPaint)
+                canvas.restore()
+            }
+        }
+    }
+
+    private fun drawClockGlyph(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        size: Float,
+        kind: ClockKind,
+        paused: Boolean,
+    ) {
+        if (kind == ClockKind.Timer) {
+            drawTimerGlyph(canvas, cx, cy, size, paused)
+            return
+        }
+        accentPaint.color = customization.timerColorArgb
+        accentStrokePaint.color = customization.timerColorArgb
+        accentStrokePaint.strokeWidth = dp(1.8f)
+        // Stopwatch: crown, dial and a hand pointing up-right.
+        canvas.drawCircle(cx, cy + size * 0.08f, size * 0.36f, accentStrokePaint)
+        canvas.drawLine(cx, cy - size * 0.5f, cx, cy - size * 0.3f, accentStrokePaint)
+        canvas.drawLine(cx - size * 0.16f, cy - size * 0.5f, cx + size * 0.16f, cy - size * 0.5f, accentStrokePaint)
+        if (!paused) {
+            canvas.drawLine(cx, cy + size * 0.08f, cx + size * 0.16f, cy - size * 0.1f, accentStrokePaint)
+        }
+    }
+
+    /** Expanded clock card: centred time over its label, with the notification's own controls. */
+    private fun drawClockExpanded(canvas: Canvas, clock: IslandContent.ClockActivity) {
+        val area = expandedLowerArea()
+
+        smallLabelPaint.textSize = sp(12f)
+        smallLabelPaint.color = customization.timerColorArgb
+        expandedTimePaint.textSize = sp(28f)
+        expandedTimePaint.color = customization.timerColorArgb
+
+        // Label above, time below it: both centred on the card, so the digits stay the hero.
+        val label = when {
+            !clock.isRunning -> "PAUSED"
+            clock.kind == ClockKind.Stopwatch -> "STOPWATCH"
+            else -> "TIMER"
+        }
+        val labelWidth = smallLabelPaint.measureText(label)
+        canvas.drawText(label, area.centerX() - labelWidth / 2f, area.top + dp(12f), smallLabelPaint)
+
+        val baseline = area.top + dp(46f)
+        val width = expandedTimePaint.measureText(clock.timeText)
+        val scale = (area.width() / width.coerceAtLeast(1f)).coerceIn(0.6f, 1f)
+        canvas.save()
+        canvas.scale(scale, scale, area.centerX(), baseline)
+        drawRollingClockTime(canvas, clock, area.centerX(), baseline)
+        canvas.restore()
+
+        val buttons = clock.actions.take(2).mapIndexed { index, action ->
+            ActionButton(action.title, TargetKind.Action, index)
+        } + ActionButton("Open", TargetKind.OpenContent, -1)
+        drawActionButtons(canvas, area, buttons)
+    }
+
+    /**
+     * Draws the card's time centred at [cx]. After a tick, only the characters that changed roll:
+     * a countdown's digits fall away below and the next digit drops in from above, like a
+     * mechanical counter; a stopwatch rolls the other way, matching the numbers counting up.
+     */
+    private fun drawRollingClockTime(
+        canvas: Canvas,
+        clock: IslandContent.ClockActivity,
+        cx: Float,
+        baseline: Float,
+    ) {
+        val paint = expandedTimePaint
+        val next = clock.timeText
+        val previous = clockRollFrom
+        val width = paint.measureText(next)
+        val left = cx - width / 2f
+        val progress = if (clockRollRunning) {
+            ((SystemClock.elapsedRealtime() - clockRollStartMs) / CLOCK_ROLL_MS.toFloat())
+                .coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+        if (!clockRollRunning || previous == null || previous.length != next.length || progress >= 1f) {
+            canvas.drawText(next, left, baseline, paint)
+            return
+        }
+        val eased = easeOutCubic(progress)
+        val lineHeight = paint.textSize * 1.2f
+        val downward = clock.kind == ClockKind.Timer
+        val save = canvas.save()
+        // Clip to the text line so the outgoing digit is hidden as it leaves the row.
+        canvas.clipRect(
+            left - dp(4f),
+            baseline + paint.ascent() - dp(2f),
+            left + width + dp(4f),
+            baseline + paint.descent() + dp(2f),
+        )
+        var x = left
+        for (index in next.indices) {
+            val current = next[index]
+            val before = previous[index]
+            if (current == before) {
+                canvas.drawText(current.toString(), x, baseline, paint)
+            } else {
+                val shift = lineHeight * eased
+                val enter = lineHeight * (1f - eased)
+                if (downward) {
+                    canvas.drawText(before.toString(), x, baseline + shift, paint)
+                    canvas.drawText(current.toString(), x, baseline - enter, paint)
+                } else {
+                    canvas.drawText(before.toString(), x, baseline - shift, paint)
+                    canvas.drawText(current.toString(), x, baseline + enter, paint)
+                }
+            }
+            x += paint.measureText(current.toString())
+        }
+        canvas.restoreToCount(save)
+    }
+
     private fun drawTimerGlyph(canvas: Canvas, cx: Float, cy: Float, size: Float, paused: Boolean) {
         accentPaint.color = customization.timerColorArgb
         accentStrokePaint.color = customization.timerColorArgb
@@ -2162,6 +2395,12 @@ internal class IslandPillView(context: Context) : View(context) {
                 activePointerId = event.getPointerId(0)
                 downX = event.x
                 downY = event.y
+                // A message can be slid away in either presentation, compact or expanded.
+                swipeCandidate = content is IslandContent.Notification
+                swipeDragging = false
+                swipeSettling = false
+                swipeOffsetPx = 0f
+                swipeStartX = event.x
                 if (target.kind == TargetKind.Body && customization.longPressAction != IslandLongPressAction.NONE) {
                     removeCallbacks(longPressRunnable)
                     postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout().toLong())
@@ -2174,6 +2413,22 @@ internal class IslandPillView(context: Context) : View(context) {
                 if (index < 0) { cancelTouch(); return true }
                 val dx = event.getX(index) - downX
                 val dy = event.getY(index) - downY
+                if (swipeCandidate && !swipeDragging) {
+                    // A mostly horizontal drag on a message becomes a dismiss gesture. Only the
+                    // press is cancelled here: cancelTouch() clears the pointer id this gesture
+                    // still needs to track.
+                    if (abs(dx) > touchSlop && abs(dx) > abs(dy)) {
+                        swipeDragging = true
+                        removeCallbacks(longPressRunnable)
+                        pressed = null
+                        longPressFired = false
+                    }
+                }
+                if (swipeDragging) {
+                    swipeOffsetPx = event.getX(index) - swipeStartX
+                    invalidate()
+                    return true
+                }
                 if (dx * dx + dy * dy > touchSlop * touchSlop) cancelTouch()
                 return true
             }
@@ -2182,6 +2437,22 @@ internal class IslandPillView(context: Context) : View(context) {
                 return true
             }
             MotionEvent.ACTION_UP -> {
+                if (swipeDragging) {
+                    val swept = swipeOffsetPx
+                    swipeDragging = false
+                    swipeCandidate = false
+                    cancelTouch()
+                    if (abs(swept) >= swipeDismissThresholdPx) {
+                        swipeOffsetPx = 0f
+                        listener?.onNotificationDismiss()
+                    } else {
+                        swipeSettleFrom = swept
+                        swipeSettleStartMs = SystemClock.elapsedRealtime()
+                        swipeSettling = true
+                    }
+                    invalidate()
+                    return true
+                }
                 val index = event.findPointerIndex(activePointerId)
                 val down = pressed
                 val consumedByLongPress = longPressFired
@@ -2196,6 +2467,13 @@ internal class IslandPillView(context: Context) : View(context) {
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
+                if (swipeDragging) {
+                    swipeDragging = false
+                    swipeCandidate = false
+                    swipeSettleFrom = swipeOffsetPx
+                    swipeSettleStartMs = SystemClock.elapsedRealtime()
+                    swipeSettling = true
+                }
                 cancelTouch()
                 invalidate()
                 return true
@@ -2249,7 +2527,8 @@ internal class IslandPillView(context: Context) : View(context) {
 
     private fun accessibilityLabel(target: Target): String = when (target.kind) {
         TargetKind.Body -> {
-            val name = when (content) {
+            val shown = content
+            val name = when (shown) {
                 is IslandContent.Media -> "media controls"
                 is IslandContent.Notification -> "notification"
                 is IslandContent.Timer -> "timer"
@@ -2258,6 +2537,8 @@ internal class IslandPillView(context: Context) : View(context) {
                 is IslandContent.PowerSave -> "power save"
                 is IslandContent.Call -> "call"
                 is IslandContent.Download -> "download"
+                is IslandContent.ClockActivity ->
+                    if (shown.kind == ClockKind.Stopwatch) "stopwatch" else "clock timer"
                 is IslandContent.Navigation -> "navigation"
                 null -> "island"
             }
@@ -2274,6 +2555,7 @@ internal class IslandPillView(context: Context) : View(context) {
             val actions = when (val current = content) {
                 is IslandContent.Notification -> current.actions
                 is IslandContent.Download -> current.actions
+                is IslandContent.ClockActivity -> current.actions
                 else -> emptyList()
             }
             actions.getOrNull(target.index)?.title ?: "Activity action"
@@ -2341,6 +2623,10 @@ internal class IslandPillView(context: Context) : View(context) {
         const val MORPH_WATCHDOG_MS = 900L
 
         const val SWAP_DURATION_MS = IslandMotion.SWAP_DURATION_MS
+        /** Time for an un-dismissed swipe to slide back under the shell. */
+        const val SWIPE_SETTLE_MS = 180L
+        /** Duration of one digit roll on the expanded clock card. */
+        const val CLOCK_ROLL_MS = 280L
         val REVEAL_TOTAL_MS = IslandMotion.REVEAL_DURATION_MS.toLong()
     }
 }
