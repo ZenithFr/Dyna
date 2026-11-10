@@ -341,7 +341,13 @@ object IslandStateHolder {
         }
         val currentKey = (notification?.content as? IslandContent.Notification)?.key
         val next = notificationAlerts.nextKey(currentKey)
-        if (next == null) hideNotificationLocked() else showNotificationLocked(next, bubble = next != currentKey)
+        when {
+            next == null -> hideNotificationLocked()
+            // The last queued alert keeps the island until it is dismissed, but it must not re-arm
+            // its own timeout: re-showing itself every hold would publish forever.
+            next == currentKey -> notificationJob = null
+            else -> showNotificationLocked(next, bubble = true)
+        }
     }
 
     private fun armNotificationBubble(generation: Int) {
