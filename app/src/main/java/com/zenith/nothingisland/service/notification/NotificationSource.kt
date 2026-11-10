@@ -417,7 +417,7 @@ class NotificationSource(private val context: Context) {
     ): ClockParser.Decoded? {
         if (sbn.packageName !in PopularIntegrations.clockPackages) return null
         val extras = notification.extras ?: return null
-        return ClockParser.decode(
+        val decoded = ClockParser.decode(
             ClockParser.Input(
                 sortKey = sortKeyOf(notification),
                 title = text(notification, Notification.EXTRA_TITLE),
@@ -430,6 +430,9 @@ class NotificationSource(private val context: Context) {
                 nowElapsedMs = SystemClock.elapsedRealtime(),
             ),
         )
+        // Google Clock's stopwatch publishes no state at all: its elapsed time only exists inside
+        // the notification's custom view. Read that before giving up on the card.
+        return decoded ?: ClockRemoteViews.stopwatch(context, notification)
     }
 
     /**

@@ -109,6 +109,25 @@ object ClockParser {
         return null
     }
 
+    /** `12:34.56`, `0:12:34.5`, `1:02:03` — the shapes a Clock app renders into its custom view. */
+    private val ELAPSED_TEXT = Regex("""^(?:(\d{1,3}):)?(\d{1,2}):(\d{2})(?:[.,](\d{1,3}))?$""")
+
+    /**
+     * Parses an elapsed time rendered as text (a paused stopwatch in a Clock app's custom view).
+     * Returns milliseconds, or null when [value] is not a duration.
+     */
+    fun parseElapsedText(value: String): Long? {
+        val text = value.trim()
+        if (text.isEmpty()) return null
+        val match = ELAPSED_TEXT.matchEntire(text) ?: return null
+        val hours = match.groupValues[1].toLongOrNull() ?: 0L
+        val minutes = match.groupValues[2].toLongOrNull() ?: return null
+        val seconds = match.groupValues[3].toLongOrNull() ?: return null
+        val fraction = match.groupValues[4]
+        val millis = if (fraction.isEmpty()) 0L else fraction.padEnd(3, '0').take(3).toLong()
+        return hours * 3_600_000L + minutes * 60_000L + seconds * 1_000L + millis
+    }
+
     private fun durations(sortKey: String): Map<Char, Long> =
         DURATION.findAll(sortKey).associate { match ->
             match.groupValues[1][0] to parseDuration(match.groupValues[2])

@@ -109,4 +109,21 @@ class ClockParserTest {
             ),
         )
     }
+
+    @Test
+    fun parsesElapsedTextFromACustomView() {
+        assertEquals(12_340L, ClockParser.parseElapsedText("00:12.34"))
+        assertEquals(12_300L, ClockParser.parseElapsedText("0:12.3"))
+        assertEquals(3_723_450L, ClockParser.parseElapsedText("1:02:03.45"))
+        assertEquals(63_000L, ClockParser.parseElapsedText("1:03"))
+        assertEquals(7_000L, ClockParser.parseElapsedText("  0:07  "))
+    }
+
+    @Test
+    fun rejectsTextThatIsNotADuration() {
+        assertNull(ClockParser.parseElapsedText(""))
+        assertNull(ClockParser.parseElapsedText("Paused"))
+        assertNull(ClockParser.parseElapsedText("12:345"))
+        assertNull(ClockParser.parseElapsedText("Tap to open"))
+    }
 }

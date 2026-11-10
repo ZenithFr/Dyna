@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.text.TextPaint
 import android.text.TextUtils
+import android.util.Log
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -31,7 +32,10 @@ import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandEvent
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
+
+private const val SWIPE_TAG = "IslandSwipe"
 
 /**
  * The pill. Draws the shell plus the content of the current [IslandEvent] and hit-tests the few
@@ -2422,6 +2426,7 @@ internal class IslandPillView(context: Context) : View(context) {
                         removeCallbacks(longPressRunnable)
                         pressed = null
                         longPressFired = false
+                        Log.d(SWIPE_TAG, "swipe start dx=${dx.roundToInt()}")
                     }
                 }
                 if (swipeDragging) {
@@ -2442,6 +2447,12 @@ internal class IslandPillView(context: Context) : View(context) {
                     swipeDragging = false
                     swipeCandidate = false
                     cancelTouch()
+                    Log.d(
+                        SWIPE_TAG,
+                        "swipe up swept=${swept.roundToInt()} threshold=${
+                            swipeDismissThresholdPx.roundToInt()
+                        }",
+                    )
                     if (abs(swept) >= swipeDismissThresholdPx) {
                         swipeOffsetPx = 0f
                         listener?.onNotificationDismiss()
