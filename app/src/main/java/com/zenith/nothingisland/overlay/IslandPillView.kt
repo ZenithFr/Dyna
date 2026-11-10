@@ -72,6 +72,13 @@ internal class IslandPillView(context: Context) : View(context) {
         style = Paint.Style.FILL
         color = Color.argb(48, 255, 255, 255)
     }
+    private val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val badgeColorArgb = 0xFFFF453A.toInt()
+    private val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.DEFAULT_BOLD
+    }
+
     private val progressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.WHITE
@@ -205,7 +212,6 @@ internal class IslandPillView(context: Context) : View(context) {
 
     private var highQualityMotion = true
     private var requestedRate = 0f
-    private var progressAnimating = false
 
     /** Overall morph position; 0 = compact pill, 1 = expanded card. */
     private val progress: Float
@@ -398,7 +404,6 @@ internal class IslandPillView(context: Context) : View(context) {
         content = null
         expanded = false
         animating = false
-        progressAnimating = false
         satelliteTarget = 0f
         satelliteProgress = 0f
         targets.clear()
@@ -426,8 +431,8 @@ internal class IslandPillView(context: Context) : View(context) {
         if (satelliteTarget == 0f) clearSatelliteIcon()
         removeCallbacks(settleWatchdog)
         requestMotionRate(
-            animating || revealAnimating || progressAnimating || satelliteSwapAnimating,
-            ambientOnly = animating || progressAnimating,
+            animating || revealAnimating || satelliteSwapAnimating,
+            ambientOnly = animating,
         )
         postMorphSettled()
     }
@@ -577,8 +582,7 @@ internal class IslandPillView(context: Context) : View(context) {
             dormant = dormantTarget == 1f,
         )
         animating = enabled && (content as? IslandContent.Media)?.isPlaying == true
-        progressAnimating = enabled && (content as? IslandContent.Download)?.indeterminate == true
-        if (!animating && !progressAnimating) {
+        if (!animating) {
             requestMotionRate(isMorphing() || revealAnimating || satelliteSwapAnimating)
         }
     }
@@ -701,9 +705,9 @@ internal class IslandPillView(context: Context) : View(context) {
         val revealRunning = revealAnimating &&
             (now - revealStartMs) < REVEAL_TOTAL_MS
         if (revealAnimating && !revealRunning) revealAnimating = false
-        val busy = animating || progressAnimating || springActive || dormantSettling || satelliteActive ||
+        val busy = animating || springActive || dormantSettling || satelliteActive ||
             revealRunning || swapAnimating || satelliteSwapAnimating
-        val ambientOnly = (animating || progressAnimating) && !springActive && !dormantSettling &&
+        val ambientOnly = animating && !springActive && !dormantSettling &&
             !satelliteActive && !revealRunning && !swapAnimating && !satelliteSwapAnimating
         requestMotionRate(busy, ambientOnly)
         if (busy) postInvalidateOnAnimation()
@@ -808,7 +812,7 @@ internal class IslandPillView(context: Context) : View(context) {
                 if (expandedVariant) drawDownloadExpanded(canvas, current)
                 else drawCompactIconText(
                     canvas, current.icon,
-                    if (current.indeterminate) "…" else "${current.percent}%",
+                    current.title.ifBlank { current.appLabel },
                     areas, heightPx, customization.downloadColorArgb,
                     iconDetached = shellIconDetached(current),
                 )
@@ -936,7 +940,28 @@ internal class IslandPillView(context: Context) : View(context) {
             strokePaint.color = strokeColorArgb
             canvas.drawPath(satellitePath, strokePaint)
         }
-        drawSatelliteIcon(canvas, cx, cy, radius, IslandMotion.satelliteIconShare(progress), swapT)
+        val iconShare = IslandMotion.satelliteIconShare(progress)
+        drawSatelliteIcon(canvas, cx, cy, radius, iconShare, swapT)
+        val stacked = (content as? IslandContent.Notification)?.stackCount ?: 1
+        if (stacked > 1) drawStackBadge(canvas, cx, cy, radius, stacked, iconShare)
+    }
+
+    /** Count of queued message alerts, drawn on the bubble's top-right like the system badge. */
+    private fun drawStackBadge(canvas: Canvas, cx: Float, cy: Float, radius: Float, count: Int, alpha: Float) {
+        if (alpha <= 0.004f) return
+        val opacity = (alpha * 255f).toInt().coerceIn(0, 255)
+        val badgeRadius = dp(7.5f)
+        val bx = cx + radius * 0.72f
+        val by = cy - radius * 0.72f
+        badgePaint.color = badgeColorArgb
+        badgePaint.alpha = opacity
+        canvas.drawCircle(bx, by, badgeRadius, badgePaint)
+        badgeTextPaint.textSize = sp(9f)
+        badgeTextPaint.color = Color.WHITE
+        badgeTextPaint.alpha = opacity
+        val label = if (count > 9) "9+" else count.toString()
+        val baseline = by - (badgeTextPaint.descent() + badgeTextPaint.ascent()) / 2f
+        canvas.drawText(label, bx, baseline, badgeTextPaint)
     }
 
     private fun drawSatelliteIcon(
@@ -1041,7 +1066,7 @@ internal class IslandPillView(context: Context) : View(context) {
             is IslandContent.Timer -> timerAppIcon()
             is IslandContent.Navigation -> value.icon
             is IslandContent.Download -> value.icon
-            is IslandContent.Notification -> value.icon
+            is IslandContent.Notification -> if (value.showBubble) value.icon else null
             is IslandContent.Call -> value.icon
             else -> null
         }
@@ -1159,8 +1184,8 @@ internal class IslandPillView(context: Context) : View(context) {
         if (!springActive && !dormantSettling && !satelliteActive) {
             removeCallbacks(settleWatchdog)
             requestMotionRate(
-                animating || revealAnimating || progressAnimating || satelliteSwapAnimating,
-                ambientOnly = animating || progressAnimating,
+                animating || revealAnimating || satelliteSwapAnimating,
+                ambientOnly = animating,
             )
             // Let the owner re-place the touch window now that the shell is at rest.
             postMorphSettled()
@@ -1530,24 +1555,33 @@ internal class IslandPillView(context: Context) : View(context) {
         drawFluidText(canvas, body, textLeft, textTop + dp(34f), subtitlePaint)
 
         if (hasActions) {
-            val actions = notification.actions.take(2)
-            val gap = dp(8f)
-            val visibleHeight = dp(36f)
-            val top = area.bottom - visibleHeight
-            val width = (area.width() - gap * (actions.size - 1)) / actions.size
-            actions.forEachIndexed { index, action ->
-                val left = area.left + index * (width + gap)
-                val rect = RectF(left, top, left + width, top + visibleHeight)
-                canvas.drawRoundRect(rect, dp(18f), dp(18f), buttonPaint)
-                actionPaint.textSize = sp(12f)
-                val label = TextUtils.ellipsize(action.title, actionPaint, width - dp(16f), TextUtils.TruncateAt.END)
-                val baseline = rect.centerY() - (actionPaint.descent() + actionPaint.ascent()) / 2f
-                canvas.drawText(label, 0, label.length, rect.centerX() - actionPaint.measureText(label.toString()) / 2f, baseline, actionPaint)
-                // The visible capsule stays compact; the touch target grows to 44 dp vertically.
-                val hit = RectF(rect)
-                hit.inset(0f, -dp(4f))
-                targets += Target(TargetKind.Action, index, hit)
+            val buttons = notification.actions.take(2).mapIndexed { index, action ->
+                ActionButton(action.title, TargetKind.Action, index)
             }
+            drawActionButtons(canvas, area, buttons)
+        }
+    }
+
+    private data class ActionButton(val label: String, val kind: TargetKind, val index: Int)
+
+    /** Capsule buttons along the bottom of an expanded card; the touch target is 44 dp tall. */
+    private fun drawActionButtons(canvas: Canvas, area: RectF, buttons: List<ActionButton>) {
+        if (buttons.isEmpty()) return
+        val gap = dp(8f)
+        val visibleHeight = dp(36f)
+        val top = area.bottom - visibleHeight
+        val width = (area.width() - gap * (buttons.size - 1)) / buttons.size
+        buttons.forEachIndexed { slot, button ->
+            val left = area.left + slot * (width + gap)
+            val rect = RectF(left, top, left + width, top + visibleHeight)
+            canvas.drawRoundRect(rect, dp(18f), dp(18f), buttonPaint)
+            actionPaint.textSize = sp(12f)
+            val label = TextUtils.ellipsize(button.label, actionPaint, width - dp(16f), TextUtils.TruncateAt.END)
+            val baseline = rect.centerY() - (actionPaint.descent() + actionPaint.ascent()) / 2f
+            canvas.drawText(label, 0, label.length, rect.centerX() - actionPaint.measureText(label.toString()) / 2f, baseline, actionPaint)
+            val hit = RectF(rect)
+            hit.inset(0f, -dp(4f))
+            targets += Target(button.kind, button.index, hit)
         }
     }
 
@@ -1923,43 +1957,18 @@ internal class IslandPillView(context: Context) : View(context) {
         val area = expandedLowerArea()
         titlePaint.textSize = sp(14f)
         subtitlePaint.textSize = sp(12f)
-        val title = TextUtils.ellipsize(download.title, titlePaint, area.width() - dp(44f), TextUtils.TruncateAt.END)
+        val title = TextUtils.ellipsize(download.title, titlePaint, area.width(), TextUtils.TruncateAt.END)
         canvas.drawText(title, 0, title.length, area.left, area.top + dp(16f), titlePaint)
-        val label = if (download.indeterminate) "Working…" else "${download.percent}%"
-        smallLabelPaint.textSize = sp(12f)
-        smallLabelPaint.color = customization.downloadColorArgb
-        canvas.drawText(label, area.right - smallLabelPaint.measureText(label), area.top + dp(16f), smallLabelPaint)
         if (download.text.isNotBlank()) {
             val text = TextUtils.ellipsize(download.text, subtitlePaint, area.width(), TextUtils.TruncateAt.END)
             canvas.drawText(text, 0, text.length, area.left, area.top + dp(34f), subtitlePaint)
         }
-        val track = RectF(area.left, area.top + dp(44f), area.right, area.top + dp(48f))
-        canvas.drawRoundRect(track, dp(2f), dp(2f), trackPaint)
-        accentPaint.color = customization.downloadColorArgb
-        if (download.indeterminate) {
-            val phase = (SystemClock.elapsedRealtime() % 1200L) / 1200f
-            val segment = track.width() * 0.28f
-            val left = track.left + (track.width() + segment) * phase - segment
-            canvas.save()
-            canvas.clipRect(track)
-            canvas.drawRoundRect(RectF(left, track.top, left + segment, track.bottom), dp(2f), dp(2f), accentPaint)
-            canvas.restore()
-        } else {
-            canvas.drawRoundRect(
-                RectF(track.left, track.top, track.left + track.width() * download.percent / 100f, track.bottom),
-                dp(2f), dp(2f), accentPaint,
-            )
-        }
-        val buttonTop = (track.bottom + dp(10f)).coerceAtMost(area.bottom - dp(36f))
-        val openWidth = dp(96f)
-        val open = RectF(area.right - openWidth, buttonTop, area.right, buttonTop + dp(36f))
-        drawPillButton(canvas, open, "Open")
-        targets += Target(TargetKind.OpenContent, -1, expandedHit(open, dp(44f)))
-        if (download.cancelIntent != null) {
-            val cancel = RectF(area.left, buttonTop, area.left + dp(96f), buttonTop + dp(36f))
-            drawPillButton(canvas, cancel, "Cancel")
-            targets += Target(TargetKind.CancelDownload, -1, expandedHit(cancel, dp(44f)))
-        }
+        // The notification's own controls (pause, stop, cancel, snooze...) instead of a progress
+        // bar that could only be estimated. Open always stays available.
+        val buttons = download.actions.take(2).mapIndexed { index, action ->
+            ActionButton(action.title, TargetKind.Action, index)
+        } + ActionButton("Open", TargetKind.OpenContent, -1)
+        drawActionButtons(canvas, area, buttons)
     }
 
     private fun drawNavigationExpanded(canvas: Canvas, navigation: IslandContent.Navigation) {
@@ -2261,14 +2270,20 @@ internal class IslandPillView(context: Context) : View(context) {
         TargetKind.Previous -> "Previous track"
         TargetKind.PlayPause -> if ((content as? IslandContent.Media)?.isPlaying == true) "Pause" else "Play"
         TargetKind.Next -> "Next track"
-        TargetKind.Action -> (content as? IslandContent.Notification)?.actions?.getOrNull(target.index)?.title ?: "Notification action"
+        TargetKind.Action -> {
+            val actions = when (val current = content) {
+                is IslandContent.Notification -> current.actions
+                is IslandContent.Download -> current.actions
+                else -> emptyList()
+            }
+            actions.getOrNull(target.index)?.title ?: "Activity action"
+        }
         TargetKind.TimerToggle -> if ((content as? IslandContent.Timer)?.isRunning == true) "Pause timer" else "Resume timer"
         TargetKind.TimerStop -> "Cancel timer"
         TargetKind.CallAnswer -> "Answer call"
         TargetKind.CallDecline -> "Decline call"
         TargetKind.CallEnd -> "End call"
         TargetKind.OpenContent -> "Open"
-        TargetKind.CancelDownload -> "Cancel download"
     }
 
     private fun targetAt(x: Float, y: Float): Target? {
@@ -2299,13 +2314,12 @@ internal class IslandPillView(context: Context) : View(context) {
             TargetKind.CallDecline -> callback.onCallDecline()
             TargetKind.CallEnd -> callback.onCallEnd()
             TargetKind.OpenContent -> callback.onOpenContent()
-            TargetKind.CancelDownload -> callback.onCancelDownload()
         }
     }
 
     private enum class TargetKind {
         Body, Previous, PlayPause, Next, Action, TimerToggle, TimerStop,
-        CallAnswer, CallDecline, CallEnd, OpenContent, CancelDownload,
+        CallAnswer, CallDecline, CallEnd, OpenContent,
     }
 
     private data class Target(val kind: TargetKind, val index: Int, val rect: RectF)

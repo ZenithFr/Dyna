@@ -11,6 +11,7 @@ import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService.Ranking
+import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import android.util.LruCache
@@ -47,6 +48,11 @@ class NotificationSource(private val context: Context) {
         if (!coerced.callsEnabled) IslandStateHolder.clearCall()
         if (!coerced.notificationsEnabled) IslandStateHolder.clearNotification()
         if (!coerced.downloadsEnabled) IslandStateHolder.clearDownload()
+        if (!coerced.clockEnabled) {
+            activePackages.filterValues { it in PopularIntegrations.clockPackages }.keys.toList().forEach { key ->
+                clearKey(key)
+            }
+        }
         if (!coerced.navigationEnabled) IslandStateHolder.clearNavigation()
         if (coerced.disabledPackages != previous.disabledPackages) {
             val disabled = coerced.disabledPackages
@@ -74,8 +80,7 @@ class NotificationSource(private val context: Context) {
             return
         }
         val appLabel = appLabel(sbn.packageName)
-        val redact = settings.redactOnLockscreen && keyguardManager?.isKeyguardLocked == true &&
-            notification.visibility != Notification.VISIBILITY_PUBLIC
+        val redact = redacts(notification)
         val icon = if (redact) appIcon(sbn.packageName) else icon(notification, sbn.packageName)
         // Parse once, then dedupe by signature. The previous path built every accepted notification
         // twice (signature pass + post pass), doubling binder/extras work on busy progress updates.
@@ -113,6 +118,28 @@ class NotificationSource(private val context: Context) {
         }
     }
 
+    /**
+     * Records notifications that were already in the shade when the listener connected, so the
+     * badge count matches the OS from the start. Only message alerts are kept; nothing pops up.
+     */
+    fun seed(active: List<StatusBarNotification>, rankingMap: RankingMap?) {
+        active.forEach { sbn ->
+            val notification = sbn.notification ?: return@forEach
+            val ranking = Ranking()
+            val known = rankingMap?.getRanking(sbn.key, ranking) == true
+            if (route(sbn, notification, if (known) ranking else null).source != IslandSource.Notification) {
+                return@forEach
+            }
+            val redact = redacts(notification)
+            val icon = if (redact) appIcon(sbn.packageName) else icon(notification, sbn.packageName)
+            val content = notificationContent(sbn, notification, appLabel(sbn.packageName), icon, redact)
+            signatures[sbn.key] = content.signature()
+            activeKeys[sbn.key] = IslandSource.Notification
+            activePackages[sbn.key] = sbn.packageName
+            IslandStateHolder.seedNotification(content)
+        }
+    }
+
     fun onRemoved(sbn: StatusBarNotification?) {
         val key = sbn?.key ?: return
         clearKey(key)
@@ -129,6 +156,10 @@ class NotificationSource(private val context: Context) {
         IslandStateHolder.clearDownload()
         IslandStateHolder.clearNavigation()
     }
+
+    private fun redacts(notification: Notification): Boolean =
+        settings.redactOnLockscreen && keyguardManager?.isKeyguardLocked == true &&
+            notification.visibility != Notification.VISIBILITY_PUBLIC
 
     private fun clearKey(key: String) {
         when (activeKeys.remove(key)) {
@@ -167,6 +198,8 @@ class NotificationSource(private val context: Context) {
             downloadsEnabled = settings.downloadsEnabled,
             navigationEnabled = settings.navigationEnabled,
             showSilentNotifications = settings.showSilentNotifications,
+            isClockApp = sbn.packageName in PopularIntegrations.clockPackages,
+            clockEnabled = settings.clockEnabled,
         )
     }
 
@@ -238,7 +271,7 @@ class NotificationSource(private val context: Context) {
             icon = icon,
             title = title,
             text = body,
-            actions = if (redact) emptyList() else actions(notification),
+            actions = if (redact) emptyList() else actions(notification, clock = isClock(sbn)),
             contentIntent = if (redact) null else notification.contentIntent,
         )
     }
@@ -249,32 +282,17 @@ class NotificationSource(private val context: Context) {
         appLabel: String,
         icon: Drawable?,
         redact: Boolean,
-    ): IslandContent.Download {
-        val extras = notification.extras ?: Bundle.EMPTY
-        val indeterminate = extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false)
-        val progress = extras.getInt(Notification.EXTRA_PROGRESS, -1)
-        val max = extras.getInt(Notification.EXTRA_PROGRESS_MAX, 100).coerceAtLeast(1)
-        val percent = when {
-            indeterminate -> -1
-            progress < 0 -> -1
-            else -> (progress * 100L / max).toInt().coerceIn(0, 100)
-        }
-        val cancel = notification.actions.orEmpty().firstOrNull { action ->
-            val title = action.title?.toString()?.lowercase().orEmpty()
-            "cancel" in title || "stop" in title || "pause" in title
-        }?.actionIntent
-        return IslandContent.Download(
-            key = sbn.key,
-            packageName = sbn.packageName,
-            appLabel = appLabel,
-            icon = icon,
-            title = if (redact) appLabel else text(notification, Notification.EXTRA_TITLE) ?: appLabel,
-            text = if (redact) "" else text(notification, Notification.EXTRA_TEXT) ?: "",
-            percent = percent,
-            contentIntent = if (redact) null else notification.contentIntent,
-            cancelIntent = if (redact) null else cancel,
-        )
-    }
+    ): IslandContent.Download = IslandContent.Download(
+        key = sbn.key,
+        packageName = sbn.packageName,
+        appLabel = appLabel,
+        icon = icon,
+        title = if (redact) appLabel else text(notification, Notification.EXTRA_TITLE) ?: appLabel,
+        text = if (redact) "" else text(notification, Notification.EXTRA_TEXT) ?: "",
+        // The notification's own buttons (pause, stop, cancel, snooze...) replace the progress bar.
+        actions = if (redact) emptyList() else actions(notification, clock = isClock(sbn)),
+        contentIntent = if (redact) null else notification.contentIntent,
+    )
 
     private fun navigationContent(
         sbn: StatusBarNotification,
@@ -316,16 +334,37 @@ class NotificationSource(private val context: Context) {
         return value?.takeIf { it.isNotEmpty() }
     }
 
-    private fun actions(notification: Notification): List<NotificationAction> {
+    private fun isClock(sbn: StatusBarNotification): Boolean =
+        sbn.packageName in PopularIntegrations.clockPackages
+
+    /**
+     * Button order. Replies come first as before; for clock apps the dismiss/stop and snooze
+     * controls lead, so an alarm or timer can be silenced without expanding anything.
+     */
+    private fun actions(notification: Notification, clock: Boolean): List<NotificationAction> {
         val candidates = notification.actions.orEmpty()
             .filter { !it.title.isNullOrBlank() && it.actionIntent != null }
-            .sortedByDescending { !it.remoteInputs.isNullOrEmpty() }
+            .sortedWith(
+                compareBy<Notification.Action>(
+                    { if (clock) clockRank(it.title.toString()) else 0 },
+                    { it.remoteInputs.isNullOrEmpty() },
+                ),
+            )
         return candidates.take(MAX_ACTIONS).map { action ->
             NotificationAction(
                 title = action.title.toString(),
                 pendingIntent = action.actionIntent,
                 remoteInput = action.remoteInputs?.firstOrNull(),
             )
+        }
+    }
+
+    private fun clockRank(title: String): Int {
+        val lower = title.lowercase()
+        return when {
+            "stop" in lower || "dismiss" in lower || "pause" in lower || "reset" in lower -> 0
+            "snooze" in lower -> 1
+            else -> 2
         }
     }
 
@@ -378,7 +417,7 @@ class NotificationSource(private val context: Context) {
         listOf(key, title, text, actions.joinToString("|") { it.title }).joinToString("\u0000")
 
     private fun IslandContent.Download.signature(): String =
-        listOf(key, title, text, percent).joinToString("\u0000")
+        listOf(key, title, text, actions.joinToString("|") { it.title }).joinToString("\u0000")
 
     private fun IslandContent.Navigation.signature(): String =
         listOf(key, instruction, detail).joinToString("\u0000")

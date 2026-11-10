@@ -19,6 +19,8 @@ import kotlinx.coroutines.launch
  */
 object IslandStateHolder {
     const val TRANSIENT_DURATION_MS = 4_000L
+    /** How long an alert's app-icon bubble stays out before it retracts into the shell. */
+    const val BUBBLE_DURATION_MS = 3_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow<IslandEvent?>(null)
@@ -26,6 +28,8 @@ object IslandStateHolder {
 
     private var call: IslandEvent? = null
     private var notification: IslandEvent? = null
+    /** Every accepted message alert, so the island can rotate and count them like the OS shade. */
+    private val notificationAlerts = AlertStack<IslandContent.Notification>()
     private var charging: IslandEvent? = null
     private var batteryLow: IslandEvent? = null
     private var powerSave: IslandEvent? = null
@@ -35,6 +39,7 @@ object IslandStateHolder {
     private var media: IslandEvent? = null
 
     private var notificationJob: Job? = null
+    private var notificationBubbleJob: Job? = null
     private var chargingJob: Job? = null
     private var batteryLowJob: Job? = null
     private var powerSaveJob: Job? = null
@@ -44,13 +49,15 @@ object IslandStateHolder {
     private var powerSaveGeneration = 0
 
     private var notificationDurationMs = TRANSIENT_DURATION_MS
+    private var notificationBubbleMs = BUBBLE_DURATION_MS
     private var chargingDurationMs = TRANSIENT_DURATION_MS
     private var batteryAlertDurationMs = TRANSIENT_DURATION_MS
 
     val current: IslandEvent? get() = _state.value
 
     @Synchronized
-    fun updateAlertDurations(notificationMs: Long, chargingMs: Long, batteryMs: Long) {
+    fun updateAlertDurations(notificationMs: Long, chargingMs: Long, batteryMs: Long, bubbleMs: Long) {
+        notificationBubbleMs = bubbleMs.coerceAtLeast(500L)
         notificationDurationMs = notificationMs.coerceAtLeast(500L)
         chargingDurationMs = chargingMs.coerceAtLeast(500L)
         batteryAlertDurationMs = batteryMs.coerceAtLeast(500L)
@@ -83,23 +90,42 @@ object IslandStateHolder {
         publishLocked()
     }
 
+    /**
+     * Queues the alert and shows it now. A post made while another alert is queued starts the
+     * rotation: the island cycles through every queued alert until the last one is dismissed.
+     */
     @Synchronized
     fun postNotification(content: IslandContent.Notification) {
-        val generation = ++notificationGeneration
-        notification = IslandEvent(IslandSource.Notification, content, expanded = false, transient = true)
-        publishLocked()
-        armNotificationTimeout(generation)
+        notificationAlerts.upsert(content.key, content)
+        showNotificationLocked(content.key, bubble = true)
     }
 
+    /**
+     * Records an alert that was already in the shade when the listener connected. It only feeds
+     * the count; it never pops up or starts a rotation.
+     */
+    @Synchronized
+    fun seedNotification(content: IslandContent.Notification) {
+        notificationAlerts.seed(content.key, content)
+    }
+
+    /** [key] = a dismissed or handled alert; null = the whole queue (service stop, feature off). */
     @Synchronized
     fun clearNotification(key: String? = null) {
-        val shown = notification ?: return
-        if (key != null && (shown.content as? IslandContent.Notification)?.key != key) return
-        notificationGeneration++
-        notificationJob?.cancel()
-        notificationJob = null
-        notification = null
-        publishLocked()
+        if (key == null) {
+            notificationAlerts.clear()
+            hideNotificationLocked()
+            return
+        }
+        if (!notificationAlerts.remove(key)) return
+        val shownKey = (notification?.content as? IslandContent.Notification)?.key
+        val next = notificationAlerts.nextKey(key)
+        when {
+            next == null -> hideNotificationLocked()
+            key == shownKey && notificationAlerts.rotating -> showNotificationLocked(next, bubble = true)
+            key == shownKey -> hideNotificationLocked()
+            else -> refreshNotificationCountLocked()
+        }
     }
 
     @Synchronized
@@ -197,31 +223,30 @@ object IslandStateHolder {
         publishLocked()
     }
 
+    /** Hides the visible alerts. Queued notifications stay counted until they are dismissed. */
     @Synchronized
     fun clearTransient() {
-        notificationGeneration++
         chargingGeneration++
         batteryLowGeneration++
         powerSaveGeneration++
-        notificationJob?.cancel()
         chargingJob?.cancel()
         batteryLowJob?.cancel()
         powerSaveJob?.cancel()
-        notificationJob = null
         chargingJob = null
         batteryLowJob = null
         powerSaveJob = null
-        val hadAlert = notification != null || charging != null || batteryLow != null || powerSave != null
-        notification = null
+        val hadAlert = charging != null || batteryLow != null || powerSave != null
         charging = null
         batteryLow = null
         powerSave = null
+        hideNotificationLocked()
         if (hadAlert) publishLocked()
     }
 
     @Synchronized
     fun clearAll() {
         clearTransient()
+        notificationAlerts.clear()
         call = null
         timer = null
         navigation = null
@@ -259,13 +284,75 @@ object IslandStateHolder {
         publishLocked()
     }
 
+    /** Shows [key] from the queue. [bubble] = the app-icon bubble detaches again for this alert. */
+    private fun showNotificationLocked(key: String, bubble: Boolean) {
+        val content = notificationAlerts.get(key)
+        if (content == null) {
+            hideNotificationLocked()
+            return
+        }
+        val generation = ++notificationGeneration
+        notification = IslandEvent(
+            IslandSource.Notification,
+            content.copy(stackCount = notificationAlerts.size, showBubble = bubble),
+            expanded = false,
+            transient = true,
+        )
+        publishLocked()
+        armNotificationTimeout(generation)
+        if (bubble) armNotificationBubble(generation) else notificationBubbleJob?.cancel()
+    }
+
+    private fun hideNotificationLocked() {
+        notificationGeneration++
+        notificationJob?.cancel()
+        notificationBubbleJob?.cancel()
+        notificationJob = null
+        notificationBubbleJob = null
+        if (notification == null) return
+        notification = null
+        publishLocked()
+    }
+
+    /** Only the count changed (another alert was dismissed), so keep the visible alert as it is. */
+    private fun refreshNotificationCountLocked() {
+        val shown = notification ?: return
+        val content = shown.content as? IslandContent.Notification ?: return
+        notification = shown.copy(content = content.copy(stackCount = notificationAlerts.size))
+        publishLocked()
+    }
+
     private fun armNotificationTimeout(generation: Int) {
         notificationJob?.cancel()
         notificationJob = scope.launch {
             delay(notificationDurationMs)
             synchronized(this@IslandStateHolder) {
                 if (notificationGeneration != generation || notification == null) return@synchronized
-                notification = null
+                advanceNotificationLocked()
+            }
+        }
+    }
+
+    /** The hold ran out: rotate to the next queued alert, or retract the alert once it is alone. */
+    private fun advanceNotificationLocked() {
+        if (!notificationAlerts.rotating) {
+            hideNotificationLocked()
+            return
+        }
+        val currentKey = (notification?.content as? IslandContent.Notification)?.key
+        val next = notificationAlerts.nextKey(currentKey)
+        if (next == null) hideNotificationLocked() else showNotificationLocked(next, bubble = next != currentKey)
+    }
+
+    private fun armNotificationBubble(generation: Int) {
+        notificationBubbleJob?.cancel()
+        notificationBubbleJob = scope.launch {
+            delay(notificationBubbleMs)
+            synchronized(this@IslandStateHolder) {
+                if (notificationGeneration != generation) return@synchronized
+                val shown = notification ?: return@synchronized
+                val content = shown.content as? IslandContent.Notification ?: return@synchronized
+                notification = shown.copy(content = content.copy(showBubble = false))
                 publishLocked()
             }
         }

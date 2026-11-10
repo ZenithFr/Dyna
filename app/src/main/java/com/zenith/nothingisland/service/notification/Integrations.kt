@@ -10,7 +10,7 @@ data class IslandIntegration(
     val label: String,
     val kind: Kind,
 ) {
-    enum class Kind { Messaging, Calls, Media, Maps, Camera, Downloads, Store }
+    enum class Kind { Messaging, Calls, Media, Maps, Camera, Downloads, Store, Clock }
 }
 
 object PopularIntegrations {
@@ -29,10 +29,18 @@ object PopularIntegrations {
         IslandIntegration("com.android.chrome", "Chrome downloads", IslandIntegration.Kind.Downloads),
         IslandIntegration("com.android.vending", "Play Store", IslandIntegration.Kind.Store),
         IslandIntegration("com.android.providers.downloads", "System downloads", IslandIntegration.Kind.Downloads),
+        IslandIntegration("com.google.android.deskclock", "Google Clock", IslandIntegration.Kind.Clock),
+        IslandIntegration("com.android.deskclock", "Clock", IslandIntegration.Kind.Clock),
     )
 
     val mapsPackages: Set<String> = all
         .filter { it.kind == IslandIntegration.Kind.Maps }
+        .map { it.packageName }
+        .toSet()
+
+    /** Stock and Google Clock: timers and stopwatch run as ongoing activities with their controls. */
+    val clockPackages: Set<String> = all
+        .filter { it.kind == IslandIntegration.Kind.Clock }
         .map { it.packageName }
         .toSet()
 }

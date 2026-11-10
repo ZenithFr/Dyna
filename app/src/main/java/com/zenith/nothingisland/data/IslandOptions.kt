@@ -89,6 +89,7 @@ fun IslandSettings.resetCategory(category: IslandSettingsCategory): IslandSettin
         )
         IslandSettingsCategory.NOTIFICATIONS -> copy(
             notificationDurationSec = defaults.notificationDurationSec,
+            bubbleDurationSec = defaults.bubbleDurationSec,
             chargingDurationSec = defaults.chargingDurationSec,
             batteryAlertDurationSec = defaults.batteryAlertDurationSec,
             batteryLowThresholdPercent = defaults.batteryLowThresholdPercent,
@@ -108,6 +109,7 @@ fun IslandSettings.resetCategory(category: IslandSettingsCategory): IslandSettin
             powerSaveEnabled = defaults.powerSaveEnabled,
             downloadsEnabled = defaults.downloadsEnabled,
             navigationEnabled = defaults.navigationEnabled,
+            clockEnabled = defaults.clockEnabled,
         )
         IslandSettingsCategory.BEHAVIOUR -> copy(
             idleBehaviour = defaults.idleBehaviour,

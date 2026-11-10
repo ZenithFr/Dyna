@@ -93,6 +93,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
                     notificationMs = snapshot.notificationDurationSec * 1000L,
                     chargingMs = snapshot.chargingDurationSec * 1000L,
                     batteryMs = snapshot.batteryAlertDurationSec * 1000L,
+                    bubbleMs = snapshot.bubbleDurationSec * 1000L,
                 )
                 chargingSource.updateSettings(snapshot)
                 if (overlay?.isScreenActive != false) {
@@ -242,18 +243,39 @@ class IslandService : AccessibilityService(), IslandInteraction {
         fire(intent)
     }
 
-    override fun onCancelDownload() {
-        val download = IslandStateHolder.current?.content as? IslandContent.Download ?: return
-        if (fire(download.cancelIntent)) IslandStateHolder.clearDownload(download.key)
-    }
-
+    /**
+     * Buttons from a notification alert or an ongoing activity (download, clock timer). Only a
+     * message alert is dismissed from the island after its action; an activity keeps running and
+     * the app re-posts its notification with the new state.
+     */
     override fun onNotificationAction(index: Int) {
         val event = IslandStateHolder.current ?: return
-        val notification = event.content as? IslandContent.Notification ?: return
-        val action = notification.actions.getOrNull(index) ?: return
+        val actions: List<NotificationAction>
+        val key: String
+        val title: String
+        val contentIntent: PendingIntent?
+        val dismissOnAction: Boolean
+        when (val content = event.content) {
+            is IslandContent.Notification -> {
+                actions = content.actions
+                key = content.key
+                title = content.title
+                contentIntent = content.contentIntent
+                dismissOnAction = true
+            }
+            is IslandContent.Download -> {
+                actions = content.actions
+                key = content.key
+                title = content.title
+                contentIntent = content.contentIntent
+                dismissOnAction = false
+            }
+            else -> return
+        }
+        val action = actions.getOrNull(index) ?: return
 
         if (action.remoteInput == null) {
-            if (fire(action.pendingIntent)) IslandStateHolder.clearNotification(notification.key)
+            if (fire(action.pendingIntent) && dismissOnAction) IslandStateHolder.clearNotification(key)
             return
         }
         if (action.pendingIntent == null) return
@@ -262,15 +284,15 @@ class IslandService : AccessibilityService(), IslandInteraction {
         val shown = runCatching {
             replyWindow.show(
                 anchorBottomPx = anchor,
-                hintText = "Reply to ${notification.title}",
-            ) { text -> sendReply(action, text, notification.key) }
+                hintText = "Reply to $title",
+            ) { text -> sendReply(action, text, key) }
         }.getOrDefault(false)
         if (shown) {
-            replyKey = notification.key
+            replyKey = key
         } else {
             // A RemoteInput action expects results. Opening the conversation is safe; sending the
             // bare reply PendingIntent without a result bundle is not a reliable app-UI fallback.
-            fire(notification.contentIntent)
+            fire(contentIntent)
         }
     }
 

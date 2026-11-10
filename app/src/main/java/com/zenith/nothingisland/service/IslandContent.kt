@@ -74,6 +74,10 @@ sealed interface IslandContent {
         val text: String,
         val actions: List<NotificationAction>,
         val contentIntent: PendingIntent?,
+        /** Messages currently queued from all apps, so the bubble badge matches the OS shade. */
+        val stackCount: Int = 1,
+        /** False once the detached app-icon bubble has retracted for this alert. */
+        val showBubble: Boolean = true,
     ) : IslandContent
 
     /** Battery gained/lost power. */
@@ -105,7 +109,11 @@ sealed interface IslandContent {
         val declineColor: Int,
     ) : IslandContent
 
-    /** Download / install / transfer progress from a progress notification. */
+    /**
+     * An ongoing activity that stays visible while it runs: a download or install, or a running
+     * clock timer/stopwatch. Progress is deliberately not drawn (estimates glitch); the activity
+     * shows the notification's own controls (pause, stop, cancel...) instead.
+     */
     data class Download(
         val key: String,
         val packageName: String,
@@ -113,13 +121,9 @@ sealed interface IslandContent {
         val icon: Drawable?,
         val title: String,
         val text: String,
-        /** 0..100, or -1 when indeterminate. */
-        val percent: Int,
+        val actions: List<NotificationAction>,
         val contentIntent: PendingIntent?,
-        val cancelIntent: PendingIntent?,
-    ) : IslandContent {
-        val indeterminate: Boolean get() = percent < 0
-    }
+    ) : IslandContent
 
     /** Turn-by-turn / navigation status from a maps notification. */
     data class Navigation(

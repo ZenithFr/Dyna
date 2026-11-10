@@ -69,9 +69,13 @@ data class IslandSettings(
     val powerSaveEnabled: Boolean = true,
     val downloadsEnabled: Boolean = true,
     val navigationEnabled: Boolean = true,
+    /** Clock app (Google Clock, stock Clock): running timers and stopwatch as controllable activities. */
+    val clockEnabled: Boolean = true,
 
     // Alert behaviour / privacy.
     val notificationDurationSec: Int = DEFAULT_NOTIFICATION_DURATION_SEC,
+    /** How long an alert's app-icon bubble stays detached before retracting into the shell. */
+    val bubbleDurationSec: Int = DEFAULT_BUBBLE_DURATION_SEC,
     val chargingDurationSec: Int = DEFAULT_CHARGING_DURATION_SEC,
     val batteryAlertDurationSec: Int = DEFAULT_BATTERY_ALERT_DURATION_SEC,
     val batteryLowThresholdPercent: Int = DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT,
@@ -133,6 +137,7 @@ data class IslandSettings(
         holeRatioPercent = holeRatioPercent.coerceIn(HOLE_RATIO_RANGE),
         idleContractDelaySec = idleContractDelaySec.coerceIn(IDLE_CONTRACT_DELAY_RANGE),
         notificationDurationSec = notificationDurationSec.coerceIn(ALERT_DURATION_RANGE),
+        bubbleDurationSec = bubbleDurationSec.coerceIn(BUBBLE_DURATION_RANGE),
         chargingDurationSec = chargingDurationSec.coerceIn(ALERT_DURATION_RANGE),
         batteryAlertDurationSec = batteryAlertDurationSec.coerceIn(ALERT_DURATION_RANGE),
         batteryLowThresholdPercent = batteryLowThresholdPercent.coerceIn(BATTERY_LOW_THRESHOLD_RANGE),
@@ -166,6 +171,7 @@ data class IslandSettings(
         val IDLE_CONTRACT_DELAY_RANGE = 1..10
         val HOLE_RATIO_UI_RANGE = 20..50
         val ALERT_DURATION_RANGE = 2..10
+        val BUBBLE_DURATION_RANGE = 1..10
         val BATTERY_LOW_THRESHOLD_RANGE = 5..30
         val EXPANDED_MAX_WIDTH_RANGE = 280..408
         val EXPANDED_CORNER_RADIUS_RANGE = 24..44
@@ -218,6 +224,7 @@ data class IslandSettings(
         const val DEFAULT_MOTION_ENABLED = true
         const val DEFAULT_VERBOSE_LOGGING = false
         const val DEFAULT_NOTIFICATION_DURATION_SEC = 4
+        const val DEFAULT_BUBBLE_DURATION_SEC = 3
         const val DEFAULT_CHARGING_DURATION_SEC = 4
         const val DEFAULT_BATTERY_ALERT_DURATION_SEC = 4
         const val DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT = 20
@@ -307,7 +314,9 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.powerSaveEnabled] = next.powerSaveEnabled
             preferences[Keys.downloadsEnabled] = next.downloadsEnabled
             preferences[Keys.navigationEnabled] = next.navigationEnabled
+            preferences[Keys.clockEnabled] = next.clockEnabled
             preferences[Keys.notificationDuration] = next.notificationDurationSec
+            preferences[Keys.bubbleDuration] = next.bubbleDurationSec
             preferences[Keys.chargingDuration] = next.chargingDurationSec
             preferences[Keys.batteryAlertDuration] = next.batteryAlertDurationSec
             preferences[Keys.batteryLowThreshold] = next.batteryLowThresholdPercent
@@ -419,7 +428,9 @@ private object Keys {
     val powerSaveEnabled = booleanPreferencesKey("source_power_save_enabled")
     val downloadsEnabled = booleanPreferencesKey("source_downloads_enabled")
     val navigationEnabled = booleanPreferencesKey("source_navigation_enabled")
+    val clockEnabled = booleanPreferencesKey("source_clock_enabled")
     val notificationDuration = intPreferencesKey("notification_duration_sec")
+    val bubbleDuration = intPreferencesKey("bubble_duration_sec")
     val chargingDuration = intPreferencesKey("charging_duration_sec")
     val batteryAlertDuration = intPreferencesKey("battery_alert_duration_sec")
     val batteryLowThreshold = intPreferencesKey("battery_low_threshold_percent")
@@ -495,7 +506,9 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     powerSaveEnabled = this[Keys.powerSaveEnabled] ?: true,
     downloadsEnabled = this[Keys.downloadsEnabled] ?: true,
     navigationEnabled = this[Keys.navigationEnabled] ?: true,
+    clockEnabled = this[Keys.clockEnabled] ?: true,
     notificationDurationSec = this[Keys.notificationDuration] ?: IslandSettings.DEFAULT_NOTIFICATION_DURATION_SEC,
+    bubbleDurationSec = this[Keys.bubbleDuration] ?: IslandSettings.DEFAULT_BUBBLE_DURATION_SEC,
     chargingDurationSec = this[Keys.chargingDuration] ?: IslandSettings.DEFAULT_CHARGING_DURATION_SEC,
     batteryAlertDurationSec = this[Keys.batteryAlertDuration] ?: IslandSettings.DEFAULT_BATTERY_ALERT_DURATION_SEC,
     batteryLowThresholdPercent = this[Keys.batteryLowThreshold] ?: IslandSettings.DEFAULT_BATTERY_LOW_THRESHOLD_PERCENT,
