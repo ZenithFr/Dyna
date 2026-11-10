@@ -200,6 +200,35 @@ relevant log lines here only after running them on the phone.
 
 ---
 
+## Run 2 — 2026-11-10 · `master` @ `412a0bd` · v0.5.0 debug (clock card, swipe-to-dismiss)
+
+Wireless ADB (`adb-00196654H003076-ptc6TG (2)._adb-tls-connect._tcp`), Nothing Phone (A001), debug APK.
+
+### Verified
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Build + JVM unit tests | `mise exec java@openjdk-21 -- ./gradlew assembleDebug testDebugUnitTest` | **BUILD SUCCESSFUL**, **118 tests, 0 failures** (the two shade-seeding tests were removed with the feature). |
+| Install | `adb install -r app/build/outputs/apk/debug/app-debug.apk` | **Success** |
+| Clock card surfaces | `adb shell am start -a android.intent.action.SET_TIMER --ei android.intent.extra.alarm.LENGTH 480` | `D IslandOverlay: attach island (phase=CONTENT, source=Clock)`. The sheet is **not** ongoing, so the card is gated on the decoded `isClockActivity` flag, not on `isClockApp && isOngoing`. |
+| Compact live countdown | screenshot pair ~2 s apart while the timer ran | Compact pill shows the clock glyph left of the cutout and the live `mm:ss` right of it, decrementing in step with the Clock app (06:05 → 06:04 …). The card is fed by the 1 Hz `tickClock` job, re-anchored to `SystemClock.elapsedRealtime`, so it never accumulates tick drift. |
+| Sort key is readable | verbose logcat | Google Clock's state is in the **public** `Notification.getSortKey()`. The old reflective `StatusBarNotification.getSortKey()` returned `null` on device and is gone: real key `1 3|↺63|RUNNING|▶20:31:56.963|Σ0:03:00|Δ0:00:07|⏳0:02:53`, expired key `0 3|↺63|EXPIRED|…|⏳0:00:00` → the decoded card disappears and the app's own "time's up" alarm stays an ordinary alert. |
+| Expanded clock layout | tap the pill while the card is shown | `TIMER` label centred above a centred 28 sp time; Pause / Add 1 min / Open below. No progress bar, no percentage. |
+| Digit roll | `adb shell screenrecord --time-limit 4` → 363 frames @ 90 fps, frame-difference scan | The biggest frame deltas cluster at f0070–f0078, i.e. the 05:20 → 05:19 boundary: the old ones digit slides down out of the viewport and the new one drops in from above (countdown rolls downward). |
+| No detached clock bubble | screenshot while the clock card was the active source | Shell only. `ClockActivity.satelliteIcon()` returns `null`, so the Clock app icon is never mirrored into the bubble. |
+| Swipe clears the island | `adb shell cmd notification post -S bigtext -t "Swipe test" swipetest "slide me away"` then `adb shell input swipe 720 70 300 70 280` inside the hold window | The alert disappears from both presentations immediately; the island falls back to the clock card. The gesture itself was broken by a `cancelTouch()` call on swipe start that cleared `activePointerId`; only the press is cancelled now. |
+
+### Not yet confirmed
+
+| Check | Why it is open |
+| --- | --- |
+| Swipe also cancels the shade copy | `adb shell cmd notification list` still showed `0|com.android.shell|…|swipetest` after the swipe and no `removed` line was logged. `IslandNotificationListener.dismiss()` now logs the failure (`cancel failed for <key>`) instead of swallowing it — needs one retest on this build. |
+| Badge counts only alerts that arrive while the island runs | Shade restoration no longer queues anything (`NotificationSource.seed` only remembers keys so later updates/removals still route), so a post with other shade entries present must show `stackCount = 1`. Untested on device. |
+| Stopwatch decode | Not started on device yet; expected live elapsed time + the stopwatch glyph (`ClockParser` reads the `Σ` total and per-platform chronometer extras). |
+| No detached bubble on a **stopwatch** | Derived from the same `ClockActivity` path as the timer, still to be seen physically. |
+
+---
+
 ### H. Multi-alert rotation, unread badge, Clock timers, notification controls
 
 Not yet run on a device. Source tests only (`IslandStateHolderTest`, `NotificationGateTest`,
