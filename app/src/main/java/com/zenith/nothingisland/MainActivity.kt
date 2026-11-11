@@ -48,6 +48,19 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
 
+        // The timer must survive a process kill and alert from a receiver, so bind its Android
+        // pieces here as well as in the service: whichever starts first restores the countdown.
+        TimerModule.attach(applicationContext)
+
+        // The finished-timer alert is a notification. Ask once; a denial is not fatal (the alert
+        // falls back to a direct vibration) and the Settings page can explain it.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
+
         setContent {
             NothingIslandTheme {
                 val settings by repository.settings.collectAsStateWithLifecycle(
@@ -255,5 +268,6 @@ class MainActivity : ComponentActivity() {
         const val STATUS_SETTLE_MS = 750L
         const val DEFAULT_TIMER_MINUTES = 5
         const val HOLE_TAG = "IslandHole"
+        const val REQUEST_NOTIFICATIONS = 0x7A13
     }
 }

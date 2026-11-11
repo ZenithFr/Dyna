@@ -111,6 +111,8 @@ fun IslandSettings.resetCategory(category: IslandSettingsCategory): IslandSettin
             downloadsEnabled = defaults.downloadsEnabled,
             navigationEnabled = defaults.navigationEnabled,
             clockEnabled = defaults.clockEnabled,
+            timerAlertVibrate = defaults.timerAlertVibrate,
+            timerAlertSound = defaults.timerAlertSound,
         )
         IslandSettingsCategory.BEHAVIOUR -> copy(
             idleBehaviour = defaults.idleBehaviour,

@@ -4,6 +4,18 @@
     <!-- Used by the onboarding checklist to offer the battery-optimisation exemption dialog. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- A timer must fire on time while the phone dozes in a pocket. Play policy reserves
+         USE_EXACT_ALARM for apps whose core function is alarms, so this is the requestable
+         variant with an inexact fallback (see AlarmTimerScheduler). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+    <!-- The finished-timer alert is a notification, which is how an app may vibrate/sound with the
+         screen off on Android 13+. Requested at runtime in MainActivity. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Only used by the BootReceiver, which stays disabled until a timer exists. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- Needed on Android 11+ to list installed launcher apps for per-app notification filtering. -->
     <queries>
         <intent>
@@ -76,6 +88,24 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <!-- Timer completion. Not exported: only our own PendingIntent arms it. -->
+        <receiver
+            android:name=".service.timer.TimerAlarmReceiver"
+            android:exported="false" />
+
+        <!--
+            Re-arms a stored timer after a reboot. Disabled in the manifest and enabled at runtime
+            only while a timer exists, so the app never cold-starts on boot for nothing.
+        -->
+        <receiver
+            android:name=".service.timer.BootReceiver"
+            android:enabled="false"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

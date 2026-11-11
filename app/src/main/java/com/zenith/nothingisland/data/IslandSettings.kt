@@ -73,6 +73,11 @@ data class IslandSettings(
     /** Clock app (Google Clock, stock Clock): running timers and stopwatch as controllable activities. */
     val clockEnabled: Boolean = true,
 
+    // Timer completion alert. A timer that only redraws the island is a silent failure, so the
+    // alert defaults to vibration (perceivable in a pocket) and no sound (never surprises a meeting).
+    val timerAlertVibrate: Boolean = DEFAULT_TIMER_ALERT_VIBRATE,
+    val timerAlertSound: Boolean = DEFAULT_TIMER_ALERT_SOUND,
+
     // Alert behaviour / privacy.
     val notificationDurationSec: Int = DEFAULT_NOTIFICATION_DURATION_SEC,
     /** How long an alert's app-icon bubble stays detached before retracting into the shell. */
@@ -226,6 +231,8 @@ data class IslandSettings(
         const val DEFAULT_NOTIFICATION_SHOW_TITLE = true
         const val DEFAULT_SHOW_SILENT_NOTIFICATIONS = true
         const val DEFAULT_MOTION_ENABLED = true
+        const val DEFAULT_TIMER_ALERT_VIBRATE = true
+        const val DEFAULT_TIMER_ALERT_SOUND = false
         const val DEFAULT_VERBOSE_LOGGING = false
         const val DEFAULT_NOTIFICATION_DURATION_SEC = 4
         const val DEFAULT_BUBBLE_DURATION_SEC = 3
@@ -321,6 +328,8 @@ class IslandSettingsRepository private constructor(private val context: Context)
             preferences[Keys.downloadsEnabled] = next.downloadsEnabled
             preferences[Keys.navigationEnabled] = next.navigationEnabled
             preferences[Keys.clockEnabled] = next.clockEnabled
+            preferences[Keys.timerAlertVibrate] = next.timerAlertVibrate
+            preferences[Keys.timerAlertSound] = next.timerAlertSound
             preferences[Keys.notificationDuration] = next.notificationDurationSec
             preferences[Keys.bubbleDuration] = next.bubbleDurationSec
             preferences[Keys.chargingDuration] = next.chargingDurationSec
@@ -378,6 +387,8 @@ class IslandSettingsRepository private constructor(private val context: Context)
     suspend fun setIslandShape(shape: IslandShape) = update { it.copy(islandShape = shape) }
     suspend fun setHighQualityMotion(enabled: Boolean) = update { it.copy(highQualityMotion = enabled) }
     suspend fun setIdleContractDelaySec(value: Int) = update { it.copy(idleContractDelaySec = value) }
+    suspend fun setTimerAlertVibrate(enabled: Boolean) = update { it.copy(timerAlertVibrate = enabled) }
+    suspend fun setTimerAlertSound(enabled: Boolean) = update { it.copy(timerAlertSound = enabled) }
     suspend fun resetToDefaults() = update { IslandSettings() }
 
     companion object {
@@ -438,6 +449,8 @@ private object Keys {
     val downloadsEnabled = booleanPreferencesKey("source_downloads_enabled")
     val navigationEnabled = booleanPreferencesKey("source_navigation_enabled")
     val clockEnabled = booleanPreferencesKey("source_clock_enabled")
+    val timerAlertVibrate = booleanPreferencesKey("timer_alert_vibrate")
+    val timerAlertSound = booleanPreferencesKey("timer_alert_sound")
     val notificationDuration = intPreferencesKey("notification_duration_sec")
     val bubbleDuration = intPreferencesKey("bubble_duration_sec")
     val chargingDuration = intPreferencesKey("charging_duration_sec")
@@ -518,6 +531,8 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     downloadsEnabled = this[Keys.downloadsEnabled] ?: true,
     navigationEnabled = this[Keys.navigationEnabled] ?: true,
     clockEnabled = this[Keys.clockEnabled] ?: true,
+    timerAlertVibrate = this[Keys.timerAlertVibrate] ?: IslandSettings.DEFAULT_TIMER_ALERT_VIBRATE,
+    timerAlertSound = this[Keys.timerAlertSound] ?: IslandSettings.DEFAULT_TIMER_ALERT_SOUND,
     notificationDurationSec = this[Keys.notificationDuration] ?: IslandSettings.DEFAULT_NOTIFICATION_DURATION_SEC,
     bubbleDurationSec = this[Keys.bubbleDuration] ?: IslandSettings.DEFAULT_BUBBLE_DURATION_SEC,
     chargingDurationSec = this[Keys.chargingDuration] ?: IslandSettings.DEFAULT_CHARGING_DURATION_SEC,

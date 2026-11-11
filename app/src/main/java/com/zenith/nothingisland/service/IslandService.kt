@@ -65,6 +65,9 @@ class IslandService : AccessibilityService(), IslandInteraction {
         // Alerts belong to the previous session; media is re-read below. The timer module owns
         // its own scope, so a running/paused timer survives a service reconnect untouched.
         IslandStateHolder.clearTransient()
+        // Bind the timer's Android pieces and rehydrate a countdown that outlived the process
+        // (killed app, reboot). A deadline that passed while nothing ran alerts now.
+        TimerModule.attach(applicationContext)
         // The holder was cleared on teardown, so put the live timer back before the first frame:
         // a paused timer has no ticker to re-publish itself.
         TimerModule.state.value?.let { IslandStateHolder.postTimer(it) }
@@ -424,6 +427,9 @@ class IslandService : AccessibilityService(), IslandInteraction {
         // Only drop it in that case; [onServiceConnected] re-posts a surviving snapshot.
         if (!ServiceStatus.isAccessibilityServiceEnabled(this, IslandService::class.java)) {
             runCatching { TimerModule.stop() }
+        } else {
+            // Keep the timer, its alarm and its stored deadline; only the UI ticker stops.
+            runCatching { TimerModule.onServiceTornDown() }
         }
         IslandStateHolder.clearAll()
 

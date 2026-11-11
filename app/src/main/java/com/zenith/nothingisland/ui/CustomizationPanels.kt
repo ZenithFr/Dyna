@@ -11,6 +11,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
@@ -22,11 +23,18 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import com.zenith.nothingisland.data.IslandIdleBehaviour
 import com.zenith.nothingisland.data.IslandLongPressAction
 import com.zenith.nothingisland.data.IslandSettings
 import com.zenith.nothingisland.data.IslandTapAction
 import com.zenith.nothingisland.service.notification.PopularIntegrations
+import com.zenith.nothingisland.service.timer.AlarmTimerScheduler
 import com.zenith.nothingisland.ui.theme.NothingHairline
 import com.zenith.nothingisland.ui.theme.NothingMuted
 import com.zenith.nothingisland.ui.theme.NothingRed
@@ -71,6 +79,77 @@ internal fun SourcesPanel(settings: IslandSettings, onSettingsChange: SettingsCh
             "Google Clock and the stock Clock: running timers and stopwatch show their Pause/Stop controls. Alarms appear as alerts with Snooze/Stop.",
             settings.clockEnabled,
         ) { onSettingsChange { s -> s.copy(clockEnabled = it) } }
+        ToggleRow(
+            "Vibrate when the timer ends",
+            "The countdown must be perceivable with the screen off, so it vibrates when it reaches zero.",
+            settings.timerAlertVibrate,
+        ) { onSettingsChange { s -> s.copy(timerAlertVibrate = it) } }
+        ToggleRow(
+            "Play a sound when the timer ends",
+            "Off by default so a finished timer cannot surprise a meeting. Vibration alone is the default alert.",
+            settings.timerAlertSound,
+        ) { onSettingsChange { s -> s.copy(timerAlertSound = it) } }
+        TimerAlarmPermissionRow()
+    }
+}
+
+/**
+ * Exact alarms are the difference between "fires at 00:00" and "fires when Doze next wakes up".
+ * Shown inline rather than in a dialog so the user can see the current state at a glance.
+ */
+@Composable
+private fun TimerAlarmPermissionRow() {
+    val context = LocalContext.current
+    var exact by remember { mutableStateOf(AlarmTimerScheduler(context).isExact()) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                exact = AlarmTimerScheduler(context).isExact()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
+        Text(
+            text = "Timer alarms",
+            style = MaterialTheme.typography.titleMedium,
+            color = NothingWhite,
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = if (exact) {
+                "Exact alarms are allowed: a timer fires on time even while the phone dozes."
+            } else {
+                "Exact alarms are blocked, so Android may deliver a finished timer a few minutes late."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (exact) NothingMuted else NothingRed,
+        )
+        if (!exact) {
+            TextButton(
+                onClick = {
+                    val intent = Intent(
+                        Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                        Uri.parse("package:${context.packageName}"),
+                    )
+                    runCatching { context.startActivity(intent) }
+                        .onFailure {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:${context.packageName}"),
+                                ),
+                            )
+                        }
+                },
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+            ) {
+                Text("Allow exact alarms", color = NothingWhite)
+            }
+        }
     }
 }
 
