@@ -1,6 +1,7 @@
 # Dyna performance budget and baseline
 
-**Status:** baseline **NOT MEASURED**. Every number below is a target, not a result.
+**Status:** baseline **PARTIALLY MEASURED** (2026-11-11). P1, P3 and Q1 have device numbers; the
+rest of the table is still a target, not a result.
 **Device of record:** CMF Phone 2 Pro (Nothing OS, Android 15), 120 Hz, package `com.zenith.nothingisland`.
 **Owner:** Unit 1 of [`plan-secure.md`](../../plan-secure.md) · requirements R4, R21, R23.
 
@@ -25,9 +26,9 @@ Fill this in from the device, then commit. Do not guess.
 
 | # | Scenario | Date | Frames | Janky % | GC_FOR_ALLOC | p95 onDraw | Notes |
 |---|---|---|---|---|---|---|---|
-| P1 | idle 60 s | — | NOT MEASURED | — | — | — | |
-| P2 | settled card 60 s | — | NOT MEASURED | — | — | — | |
-| P3 | 20 morphs | — | NOT MEASURED | — | — | — | |
+| P1 | idle 60 s | 2026-11-11 | **0** (30 s ×2, scaled) | 0.00 % | — | — | Island window attached (`NothingIsland`), launcher focused, empty shell. Same run repeated after closing the shade: 0 again |
+| P2 | settled card 60 s | 2026-11-11 | **0** dormant; **90/s** with the ambient equalizer on | 0.00 % | — | — | See the ambient finding below — P2's "0 frames" assumes the default `ambientAnimationsEnabled = false` |
+| P3 | 20 morphs | 2026-11-11 | 932 frames / **5** morphs | **0.54 %** | — | not measured | 5 janky frames. gfxinfo **frame draw** p50 5 / p90 9 / p95 11 / p99 19 ms — that is the whole draw phase, not the `island.onDraw` slice the 4 ms budget refers to; the slice needs a Perfetto trace |
 | P4 | 30 min timer | — | — | — | — | — | main-thread `apply` count: |
 | P5 | 30 min media | — | NOT MEASURED | — | — | — | |
 | P6 | 50 notifications | — | — | — | — | — | PSS before/after: |
@@ -74,7 +75,35 @@ Resolution (30-minute spike, before trusting any baseline):
 2. If it reports `Total frames rendered: 0` while the island is clearly animating, gfxinfo cannot see the surface → use the Perfetto route (`scripts/perf/perfetto.cfg`, which includes `android.surfaceflinger.frametimeline`) and record that decision here.
 3. Record the verdict below so later units do not re-litigate it.
 
-**Verdict:** open — not yet tested on the device.
+**Verdict:** **yes — `gfxinfo` does attribute accessibility-overlay frames to the package.**
+Measured 2026-11-11 with the phone unlocked and the island attached: `scripts/perf/capture.sh morph 5`
+reported **932 frames rendered, 5 janky (0.54 %)**, and the same package reported **0 frames** in the
+following 30 s once the shell settled. A metric that could not see the surface would read 0 in both
+runs. The earlier "0 frames" spike was a locked phone: no island was attached, so the taps hit
+nothing. The Perfetto route stays useful for slice-level attribution (`island.onDraw` vs layout),
+not for counting frames.
+
+### What the "~185 fps idle loop" turned out to be
+
+Worth recording so it is not re-investigated as a defect. With a media card playing, `dumpsys
+gfxinfo` showed ~190 frames/s for the package and stayed high after playback stopped. Instrumenting
+`IslandPillView.drawFrame` for one build showed the only live term was `animating` — the decorative
+playing-bars equalizer, gated on `ambientLoopsEnabled(...)` and drawn on the compact card too. This
+device has `ambientAnimationsEnabled = true` and `ambientFrameRateHz = 90`, both opt-in (defaults are
+`false` / 30 Hz), so 90 fps is exactly what was asked for. The extra frames came from the foreground
+`MainActivity` preview drawing its own copy at the same time.
+
+Two consequences, neither a bug:
+
+- **P2 needs a qualifier.** "Collapsed media ⇒ 0 frames" holds only with ambient animations off (the
+  default). With them on, a playing compact card draws at `ambientFrameRateHz`, which is the intended
+  budget for that setting, not an idle leak.
+- **Screen-off is clean.** With the display dozing the package rendered **0 frames in 5 s**, so the
+  loop does not run in the background. An earlier 163 fps "screen off" reading was taken before the
+  display had actually dozed and is discarded.
+
+Throttling the equalizer below its configured rate belongs to Unit 8 (motion governor, thermal and
+battery), not to a render-demand fix here.
 
 ## Trace points
 

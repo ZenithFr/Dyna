@@ -54,7 +54,7 @@ Tests: `app/src/test/.../service/timer/TimerCoreTest.kt`, 11 cases (double alert
 | Notification survives the 4 s finished hold | **Verified** after `1fad371`: alert fired `10:46:10.054` (deadline `10:46:10.000`, **54 ms**) and the notification was still posted 23 s later (also seen on the lockscreen: "Timer finished / HOLDTEST") |
 | Heads-up appears on Android 15 with target 35 | **Not verified** — the screen was locked, so the shade was never observed |
 | CI runs green on GitHub | **Not verified** — the workflow has never executed |
-| Q1: does `gfxinfo` see the overlay? | **Inconclusive** — `capture.sh morph 5` reported 0 frames, but the phone was locked so the island was not attached and the taps hit nothing. Re-run unlocked before recording a verdict |
+| Q1: does `gfxinfo` see the overlay? | **Answered — yes.** `capture.sh morph 5` on an unlocked phone with the island attached reported **932 frames / 0.54 % janky**, and the same package reported **0 frames** in the 30 s after the shell settled. Details and the discarded "idle loop" investigation are in [`docs/perf/PERF_BUDGET.md`](../perf/PERF_BUDGET.md) |
 
 ## Resume checklist
 
