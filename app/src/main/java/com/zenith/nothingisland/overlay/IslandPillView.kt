@@ -596,6 +596,30 @@ internal class IslandPillView(context: Context) : View(context) {
     }
 
     /**
+     * Repaints a per-second tick: the countdown digits and the expanded progress row come from the
+     * stored snapshot, so nothing is re-measured. Deliberately skips the accessibility revision —
+     * announcing a running timer every second would be hostile; structural changes still use render().
+     */
+    fun applyTick(event: IslandEvent?) {
+        val newContent = event?.content ?: return
+        motionAllowed = customization.motionEnabled && ValueAnimator.areAnimatorsEnabled()
+        // Same digit roll as render(): keep the outgoing text so the row rolls instead of hard-cutting.
+        val previousClock = content as? IslandContent.ClockActivity
+        val nextClock = newContent as? IslandContent.ClockActivity
+        clockRollRunning = false
+        clockRollFrom = null
+        if (motionAllowed && event.expanded && previousClock != null && nextClock != null &&
+            previousClock.key == nextClock.key && previousClock.timeText != nextClock.timeText
+        ) {
+            clockRollFrom = previousClock.timeText
+            clockRollStartMs = SystemClock.elapsedRealtime()
+            clockRollRunning = true
+        }
+        content = newContent
+        invalidate()
+    }
+
+    /**
      * Shell and text palette. Every colour the user can change is applied here once per settings
      * emission, never per frame; per-source accents are still assigned by the drawing helpers.
      */

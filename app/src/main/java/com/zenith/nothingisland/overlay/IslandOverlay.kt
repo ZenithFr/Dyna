@@ -260,6 +260,7 @@ class IslandOverlay(private val serviceContext: Context) {
         // A compact media position tick changes nothing on screen; keep the fresh snapshot for the
         // next expansion but skip the measure/relayout/accessibility pass entirely.
         val unchanged = newEvent == event || IslandRenderDemand.isMediaPositionTick(event, newEvent)
+        val tickOnly = IslandRenderDemand.isTickOnly(event, newEvent)
         event = newEvent
         if (suppression != IslandSuppression.NONE) return
         if (!hasContent && !idleAttachAllowed()) {
@@ -270,6 +271,12 @@ class IslandOverlay(private val serviceContext: Context) {
         // Identical payloads (media position callbacks, repeated progress posts) need no re-measure,
         // no window update and no accessibility event.
         if (unchanged && layoutParams != null) return
+        // A countdown digit is drawn from the stored snapshot: repaint it without re-measuring the
+        // window, re-placing the touch window or firing an accessibility event.
+        if (tickOnly && layoutParams != null) {
+            pill.applyTick(newEvent)
+            return
+        }
         // The window already spans both states, so a morph starts without resizing the surface.
         pill.render(newEvent)
         apply()
