@@ -14,6 +14,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.SystemClock
+import android.os.Trace
 import android.text.TextPaint
 import android.text.TextUtils
 import android.util.Log
@@ -646,6 +647,16 @@ internal class IslandPillView(context: Context) : View(context) {
     // ---------------------------------------------------------------------------------------
 
     override fun onDraw(canvas: Canvas) {
+        // Trace sections are free when no trace is running (Unit 1, docs/perf/PERF_BUDGET.md).
+        Trace.beginSection("island.onDraw")
+        try {
+            drawFrame(canvas)
+        } finally {
+            Trace.endSection()
+        }
+    }
+
+    private fun drawFrame(canvas: Canvas) {
         super.onDraw(canvas)
         if (!framesReady) return
         val widthPx = width.toFloat()
@@ -1191,6 +1202,15 @@ internal class IslandPillView(context: Context) : View(context) {
      * and the idle contraction runs a third; all three share one frame clock so they cannot drift.
      */
     private fun advanceMotion(now: Long) {
+        Trace.beginSection("island.motion")
+        try {
+            advanceMotionLocked(now)
+        } finally {
+            Trace.endSection()
+        }
+    }
+
+    private fun advanceMotionLocked(now: Long) {
         val dt = if (lastStepMs == 0L) {
             1f / 120f
         } else {

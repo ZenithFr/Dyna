@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.os.Trace
 import android.util.Log
 import android.view.Display
 import android.view.Gravity
@@ -391,6 +392,15 @@ class IslandOverlay(private val serviceContext: Context) {
     }
 
     private fun apply() {
+        Trace.beginSection("island.apply")
+        try {
+            applyWindow()
+        } finally {
+            Trace.endSection()
+        }
+    }
+
+    private fun applyWindow() {
         if (suppression != IslandSuppression.NONE) {
             hide()
             return
