@@ -43,11 +43,15 @@ Tests: `app/src/test/.../service/timer/TimerCoreTest.kt`, 11 cases (double alert
 | Claim | Status |
 |---|---|
 | Compiles, 131 unit tests pass, debug APK builds | **Verified** (`testDebugUnitTest assembleDebug`, BUILD SUCCESSFUL) |
-| Timer fires with the screen off / in Doze | **Not verified** — no device was attached |
-| Reboot re-arms a stored timer | **Not verified** |
-| Process kill then reopen restores the countdown | **Not verified** |
-| Heads-up appears on Android 15 with target 35 | **Not verified** |
-| `dumpsys alarm` shows the alarm only while a timer runs | **Not verified** |
+| Lint has zero errors | **Verified** at `1fad371`: 0 errors / 75 warnings (`lintDebug` BUILD SUCCESSFUL) |
+| Timer fires on time in Doze | **Verified** 2026-11-11: deadline `10:25:41.000`, alarm fired `10:25:41.289` (**289 ms**) under `dumpsys deviceidle force-idle` with the screen off and `SCHEDULE_EXACT_ALARM` granted (`window=0 exactAllowReason=permission`) |
+| The alert is perceivable with the screen off | **Verified**: vibration waveform played at `10:25:41.332` (`dumpsys vibrator_manager`, 0/350/180/350 ms) and the notification (`id 31250`, `category=alarm`, `SILENT`, `VIS=PUBLIC`) was still present minutes later |
+| Inexact fallback still fires | **Verified**: with the appop at `default`, the same test fired **46 s late** — the fallback works, and the settings row explains it |
+| No alarm left armed after completion | **Verified**: `dumpsys alarm` has no `TIMER_ALARM` batch after the fire |
+| Boot receiver is enabled only while a timer exists | **Verified**: `dumpsys package` shows `enabledComponents: …BootReceiver` while a timer runs, and the component returns to disabled after completion |
+| Process kill then reopen restores the countdown | **Verified**: `am force-stop` → reopen logged `Restored timer (paused=false, finished=false)` and re-armed an exact alarm for the remaining time |
+| Reboot re-arms a stored timer | **Not verified** — the phone rebooted, but wireless adb did not come back (connection refused; needs the screen unlocked) |
+| Heads-up appears on Android 15 with target 35 | **Not verified** — screen was locked, so the shade was never observed |
 | CI runs green on GitHub | **Not verified** — the workflow has never executed |
 
 ## Resume checklist

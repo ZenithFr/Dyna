@@ -26,10 +26,9 @@ jobs:
     - name: Run unit tests and assemble debug
       run: ./gradlew testDebugUnitTest assembleDebug --console=plain
 
-    - name: Run lintDebug (non-blocking)
-      continue-on-error: true
+    - name: Run lintDebug
       run: ./gradlew lintDebug --console=plain
-      # Note: lintDebug is marked continue-on-error: true until the lint baseline is clean.
+      # Errors fail the build; warnings do not. The baseline is error-free as of 1fad371.
 
     - name: Upload test report on failure
       if: failure()
