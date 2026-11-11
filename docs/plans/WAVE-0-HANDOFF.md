@@ -50,9 +50,11 @@ Tests: `app/src/test/.../service/timer/TimerCoreTest.kt`, 11 cases (double alert
 | No alarm left armed after completion | **Verified**: `dumpsys alarm` has no `TIMER_ALARM` batch after the fire |
 | Boot receiver is enabled only while a timer exists | **Verified**: `dumpsys package` shows `enabledComponents: …BootReceiver` while a timer runs, and the component returns to disabled after completion |
 | Process kill then reopen restores the countdown | **Verified**: `am force-stop` → reopen logged `Restored timer (paused=false, finished=false)` and re-armed an exact alarm for the remaining time |
-| Reboot re-arms a stored timer | **Not verified** — the phone rebooted, but wireless adb did not come back (connection refused; needs the screen unlocked) |
-| Heads-up appears on Android 15 with target 35 | **Not verified** — screen was locked, so the shade was never observed |
+| Reboot re-arms a stored timer | **Verified** 2026-11-11: the device rebooted with a stored deadline; `events` log shows `am_proc_start … nothingisland,service` at `10:31:20` and `notification_enqueue … 31250 … timer_alerts` at `10:31:47`, i.e. the boot restore fired a late alert without the activity being opened |
+| Notification survives the 4 s finished hold | **Verified** after `1fad371`: alert fired `10:46:10.054` (deadline `10:46:10.000`, **54 ms**) and the notification was still posted 23 s later (also seen on the lockscreen: "Timer finished / HOLDTEST") |
+| Heads-up appears on Android 15 with target 35 | **Not verified** — the screen was locked, so the shade was never observed |
 | CI runs green on GitHub | **Not verified** — the workflow has never executed |
+| Q1: does `gfxinfo` see the overlay? | **Inconclusive** — `capture.sh morph 5` reported 0 frames, but the phone was locked so the island was not attached and the taps hit nothing. Re-run unlocked before recording a verdict |
 
 ## Resume checklist
 
