@@ -33,6 +33,8 @@ import com.zenith.nothingisland.service.timer.TimerModule
 import com.zenith.nothingisland.ui.HomeScreen
 import com.zenith.nothingisland.ui.theme.NothingIslandTheme
 import com.zenith.nothingisland.util.ServiceStatus
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -41,6 +43,17 @@ import kotlin.math.roundToInt
 class MainActivity : ComponentActivity() {
 
     private val repository by lazy { IslandSettingsRepository.get(this) }
+
+    /** Debounced pending settings write: a slider drag must not write on every frame. */
+    private var settingsCommitJob: Job? = null
+
+    override fun onPause() {
+        super.onPause()
+        // Closing the screen mid-drag must still persist what the thumb left behind. NonCancellable
+        // because this scope dies with the activity and the write must not be abandoned halfway.
+        settingsCommitJob?.cancel()
+        lifecycleScope.launch(NonCancellable) { repository.commitPreview() }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -153,11 +166,14 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onSettingsChange = { transform ->
-                        // The service collects the DataStore flow, so this is all that live updates
-                        // need; the preview wake makes an idle island visible while editing.
-                        lifecycleScope.launch {
-                            repository.update(transform)
-                            IslandService.instance?.previewIsland()
+                        // A drag fires per frame: publish in memory for the live overlay, then let
+                        // one debounced commit turn the whole drag into a single disk write.
+                        repository.preview(transform)
+                        IslandService.instance?.previewIsland()
+                        settingsCommitJob?.cancel()
+                        settingsCommitJob = lifecycleScope.launch {
+                            delay(SETTINGS_COMMIT_DEBOUNCE_MS)
+                            repository.commitPreview()
                         }
                     },
                 )
@@ -268,6 +284,8 @@ class MainActivity : ComponentActivity() {
     private companion object {
         /** One settle re-read after resume: the accessibility service binds asynchronously. */
         const val STATUS_SETTLE_MS = 750L
+        /** Long enough to swallow a drag's ticks, short enough that a release feels saved. */
+        const val SETTINGS_COMMIT_DEBOUNCE_MS = 250L
         const val DEFAULT_TIMER_MINUTES = 5
         const val HOLE_TAG = "IslandHole"
         const val REQUEST_NOTIFICATIONS = 0x7A13

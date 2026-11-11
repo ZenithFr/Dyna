@@ -3,6 +3,7 @@ package com.zenith.nothingisland.data
 import android.annotation.SuppressLint
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -12,9 +13,12 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import java.io.IOException
 
 /**
@@ -272,97 +276,131 @@ private val Context.islandSettingsDataStore: DataStore<Preferences> by preferenc
 /** Single source of truth for the island's look and source filters. */
 class IslandSettingsRepository private constructor(private val context: Context) {
 
-    val settings: Flow<IslandSettings> = context.islandSettingsDataStore.data
-        .catch { throwable ->
-            if (throwable is IOException) emit(emptyPreferences()) else throw throwable
-        }
-        .map { preferences -> preferences.toIslandSettings() }
+    // Uncommitted drag value. Published through [settings] so the overlay follows the thumb, but
+    // written to disk only by [commitPreview].
+    private val previews = MutableStateFlow<IslandSettings?>(null)
+    private val draft = SettingsDraft(IslandSettings())
+
+    val settings: Flow<IslandSettings> = combine(
+        context.islandSettingsDataStore.data
+            .catch { throwable ->
+                if (throwable is IOException) emit(emptyPreferences()) else throw throwable
+            }
+            .map { preferences -> preferences.toIslandSettings() }
+            // Feed every emission so a preview is always relative to what actually reached disk.
+            .onEach { persisted -> draft.onCommitted(persisted) }
+            .distinctUntilChanged(),
+        previews,
+    ) { persisted, preview -> preview ?: persisted }
         .distinctUntilChanged()
 
-    /** Applies [transform] atomically and clamps the result before persisting. */
-    suspend fun update(transform: (IslandSettings) -> IslandSettings) {
-        context.islandSettingsDataStore.edit { preferences ->
-            val next = transform(preferences.toIslandSettings()).coerced()
-            preferences[Keys.offsetX] = next.offsetXDp
-            preferences[Keys.offsetY] = next.offsetYDp
-            preferences[Keys.width] = next.widthDp
-            preferences[Keys.height] = next.heightDp
-            preferences[Keys.cornerRadius] = next.cornerRadiusDp
-            preferences[Keys.strokeEnabled] = next.strokeEnabled
-            preferences[Keys.strokeWidth] = next.strokeWidthDp
-            preferences[Keys.strokeColor] = next.strokeColorArgb
-            preferences[Keys.hideInFullscreen] = next.hideInFullscreen
-            preferences[Keys.hideInLandscape] = next.hideInLandscape
-            preferences[Keys.lockPortrait] = next.lockPortrait
-            preferences[Keys.suppressDuringDnd] = next.suppressDuringDnd
-            preferences[Keys.holeEnabled] = next.holeEnabled
-            preferences[Keys.holeCenterX] = next.holeCenterXDp
-            preferences[Keys.holeCenterY] = next.holeCenterYDp
-            preferences[Keys.holeRadius] = next.holeRadiusDp
-            preferences[Keys.holeMode] = next.holeMode.name
-            preferences[Keys.holeRatio] = next.holeRatioPercent
-            preferences[Keys.holeSide] = next.holeSide.name
-            preferences[Keys.showHoleGuide] = next.showHoleGuide
-            preferences[Keys.islandShape] = next.islandShape.name
-            preferences[Keys.highQualityMotion] = next.highQualityMotion
-            preferences[Keys.idleContractDelay] = next.idleContractDelaySec
-            preferences[Keys.shellColor] = next.shellColorArgb
-            preferences[Keys.shellOpacity] = next.shellOpacityPercent
-            preferences[Keys.textColor] = next.textColorArgb
-            preferences[Keys.secondaryTextColor] = next.secondaryTextColorArgb
-            preferences[Keys.monochromeIcons] = next.monochromeIcons
-            preferences[Keys.idleBehaviour] = next.idleBehaviour.name
-            preferences[Keys.tapAction] = next.tapAction.name
-            preferences[Keys.longPressAction] = next.longPressAction.name
-            preferences[Keys.hapticsEnabled] = next.hapticsEnabled
-            preferences[Keys.alertIconInBubble] = next.alertIconInBubble
-            preferences[Keys.notificationShowTitle] = next.notificationShowTitle
-            preferences[Keys.showSilentNotifications] = next.showSilentNotifications
-            preferences[Keys.motionEnabled] = next.motionEnabled
-            preferences[Keys.verboseLogging] = next.verboseLogging
-            preferences[Keys.mediaEnabled] = next.mediaEnabled
-            preferences[Keys.notificationsEnabled] = next.notificationsEnabled
-            preferences[Keys.callsEnabled] = next.callsEnabled
-            preferences[Keys.chargingEnabled] = next.chargingEnabled
-            preferences[Keys.batteryLowEnabled] = next.batteryLowEnabled
-            preferences[Keys.powerSaveEnabled] = next.powerSaveEnabled
-            preferences[Keys.downloadsEnabled] = next.downloadsEnabled
-            preferences[Keys.navigationEnabled] = next.navigationEnabled
-            preferences[Keys.clockEnabled] = next.clockEnabled
-            preferences[Keys.timerAlertVibrate] = next.timerAlertVibrate
-            preferences[Keys.timerAlertSound] = next.timerAlertSound
-            preferences[Keys.notificationDuration] = next.notificationDurationSec
-            preferences[Keys.bubbleDuration] = next.bubbleDurationSec
-            preferences[Keys.chargingDuration] = next.chargingDurationSec
-            preferences[Keys.batteryAlertDuration] = next.batteryAlertDurationSec
-            preferences[Keys.powerSaveAlertDuration] = next.powerSaveAlertDurationSec
-            preferences[Keys.batteryLowThreshold] = next.batteryLowThresholdPercent
-            preferences[Keys.redactOnLockscreen] = next.redactOnLockscreen
-            preferences[Keys.autoExpandCalls] = next.autoExpandCalls
-            preferences[Keys.expandedMaxWidth] = next.expandedMaxWidthDp
-            preferences[Keys.expandedCornerRadius] = next.expandedCornerRadiusDp
-            preferences[Keys.contentMargin] = next.contentMarginDp
-            preferences[Keys.sensorClearance] = next.sensorClearanceDp
-            preferences[Keys.islandTextScale] = next.islandTextScalePercent
-            preferences[Keys.detachedAppIcon] = next.detachedAppIcon
-            preferences[Keys.satelliteGap] = next.satelliteGapDp
-            preferences[Keys.satelliteSize] = next.satelliteSizeDp
-            preferences[Keys.satelliteIconPadding] = next.satelliteIconPaddingDp
-            preferences[Keys.compactIconSize] = next.compactIconSizeDp
-            preferences[Keys.compactEdgePadding] = next.compactEdgePaddingDp
-            preferences[Keys.ambientAnimationsEnabled] = next.ambientAnimationsEnabled
-            preferences[Keys.ambientFrameRate] = next.ambientFrameRateHz
-            preferences[Keys.motionScale] = next.motionScalePercent
-            preferences[Keys.timerColor] = next.timerColorArgb
-            preferences[Keys.chargingColor] = next.chargingColorArgb
-            preferences[Keys.batteryLowColor] = next.batteryLowColorArgb
-            preferences[Keys.powerSaveColor] = next.powerSaveColorArgb
-            preferences[Keys.callAnswerColor] = next.callAnswerColorArgb
-            preferences[Keys.callDeclineColor] = next.callDeclineColorArgb
-            preferences[Keys.downloadColor] = next.downloadColorArgb
-            preferences[Keys.navigationColor] = next.navigationColorArgb
-            preferences[Keys.disabledPackages] = next.disabledPackages
+    /** Publishes an in-memory draft: UI and overlay update, DataStore is not touched. */
+    fun preview(transform: (IslandSettings) -> IslandSettings) {
+        draft.preview(transform)
+        previews.value = draft.draft
+    }
+
+    /**
+     * Persists the pending draft once. A tick that arrives during the write is left for the next
+     * commit: the compare-and-set only clears the value that was actually written.
+     */
+    suspend fun commitPreview() {
+        val pending = draft.takeForCommit() ?: return
+        try {
+            context.islandSettingsDataStore.edit { preferences -> write(preferences, pending) }
+        } finally {
+            previews.compareAndSet(pending, null)
         }
+    }
+
+    /** Applies [transform] and persists it at once; non-drag callers keep the old behaviour. */
+    suspend fun update(transform: (IslandSettings) -> IslandSettings) {
+        preview(transform)
+        commitPreview()
+    }
+
+    /** The single key-writing path shared by [update] and [commitPreview]. */
+    private fun write(preferences: MutablePreferences, next: IslandSettings) {
+        val coerced = next.coerced()
+        preferences[Keys.offsetX] = coerced.offsetXDp
+        preferences[Keys.offsetY] = coerced.offsetYDp
+        preferences[Keys.width] = coerced.widthDp
+        preferences[Keys.height] = coerced.heightDp
+        preferences[Keys.cornerRadius] = coerced.cornerRadiusDp
+        preferences[Keys.strokeEnabled] = coerced.strokeEnabled
+        preferences[Keys.strokeWidth] = coerced.strokeWidthDp
+        preferences[Keys.strokeColor] = coerced.strokeColorArgb
+        preferences[Keys.hideInFullscreen] = coerced.hideInFullscreen
+        preferences[Keys.hideInLandscape] = coerced.hideInLandscape
+        preferences[Keys.lockPortrait] = coerced.lockPortrait
+        preferences[Keys.suppressDuringDnd] = coerced.suppressDuringDnd
+        preferences[Keys.holeEnabled] = coerced.holeEnabled
+        preferences[Keys.holeCenterX] = coerced.holeCenterXDp
+        preferences[Keys.holeCenterY] = coerced.holeCenterYDp
+        preferences[Keys.holeRadius] = coerced.holeRadiusDp
+        preferences[Keys.holeMode] = coerced.holeMode.name
+        preferences[Keys.holeRatio] = coerced.holeRatioPercent
+        preferences[Keys.holeSide] = coerced.holeSide.name
+        preferences[Keys.showHoleGuide] = coerced.showHoleGuide
+        preferences[Keys.islandShape] = coerced.islandShape.name
+        preferences[Keys.highQualityMotion] = coerced.highQualityMotion
+        preferences[Keys.idleContractDelay] = coerced.idleContractDelaySec
+        preferences[Keys.shellColor] = coerced.shellColorArgb
+        preferences[Keys.shellOpacity] = coerced.shellOpacityPercent
+        preferences[Keys.textColor] = coerced.textColorArgb
+        preferences[Keys.secondaryTextColor] = coerced.secondaryTextColorArgb
+        preferences[Keys.monochromeIcons] = coerced.monochromeIcons
+        preferences[Keys.idleBehaviour] = coerced.idleBehaviour.name
+        preferences[Keys.tapAction] = coerced.tapAction.name
+        preferences[Keys.longPressAction] = coerced.longPressAction.name
+        preferences[Keys.hapticsEnabled] = coerced.hapticsEnabled
+        preferences[Keys.alertIconInBubble] = coerced.alertIconInBubble
+        preferences[Keys.notificationShowTitle] = coerced.notificationShowTitle
+        preferences[Keys.showSilentNotifications] = coerced.showSilentNotifications
+        preferences[Keys.motionEnabled] = coerced.motionEnabled
+        preferences[Keys.verboseLogging] = coerced.verboseLogging
+        preferences[Keys.mediaEnabled] = coerced.mediaEnabled
+        preferences[Keys.notificationsEnabled] = coerced.notificationsEnabled
+        preferences[Keys.callsEnabled] = coerced.callsEnabled
+        preferences[Keys.chargingEnabled] = coerced.chargingEnabled
+        preferences[Keys.batteryLowEnabled] = coerced.batteryLowEnabled
+        preferences[Keys.powerSaveEnabled] = coerced.powerSaveEnabled
+        preferences[Keys.downloadsEnabled] = coerced.downloadsEnabled
+        preferences[Keys.navigationEnabled] = coerced.navigationEnabled
+        preferences[Keys.clockEnabled] = coerced.clockEnabled
+        preferences[Keys.timerAlertVibrate] = coerced.timerAlertVibrate
+        preferences[Keys.timerAlertSound] = coerced.timerAlertSound
+        preferences[Keys.notificationDuration] = coerced.notificationDurationSec
+        preferences[Keys.bubbleDuration] = coerced.bubbleDurationSec
+        preferences[Keys.chargingDuration] = coerced.chargingDurationSec
+        preferences[Keys.batteryAlertDuration] = coerced.batteryAlertDurationSec
+        preferences[Keys.powerSaveAlertDuration] = coerced.powerSaveAlertDurationSec
+        preferences[Keys.batteryLowThreshold] = coerced.batteryLowThresholdPercent
+        preferences[Keys.redactOnLockscreen] = coerced.redactOnLockscreen
+        preferences[Keys.autoExpandCalls] = coerced.autoExpandCalls
+        preferences[Keys.expandedMaxWidth] = coerced.expandedMaxWidthDp
+        preferences[Keys.expandedCornerRadius] = coerced.expandedCornerRadiusDp
+        preferences[Keys.contentMargin] = coerced.contentMarginDp
+        preferences[Keys.sensorClearance] = coerced.sensorClearanceDp
+        preferences[Keys.islandTextScale] = coerced.islandTextScalePercent
+        preferences[Keys.detachedAppIcon] = coerced.detachedAppIcon
+        preferences[Keys.satelliteGap] = coerced.satelliteGapDp
+        preferences[Keys.satelliteSize] = coerced.satelliteSizeDp
+        preferences[Keys.satelliteIconPadding] = coerced.satelliteIconPaddingDp
+        preferences[Keys.compactIconSize] = coerced.compactIconSizeDp
+        preferences[Keys.compactEdgePadding] = coerced.compactEdgePaddingDp
+        preferences[Keys.ambientAnimationsEnabled] = coerced.ambientAnimationsEnabled
+        preferences[Keys.ambientFrameRate] = coerced.ambientFrameRateHz
+        preferences[Keys.motionScale] = coerced.motionScalePercent
+        preferences[Keys.timerColor] = coerced.timerColorArgb
+        preferences[Keys.chargingColor] = coerced.chargingColorArgb
+        preferences[Keys.batteryLowColor] = coerced.batteryLowColorArgb
+        preferences[Keys.powerSaveColor] = coerced.powerSaveColorArgb
+        preferences[Keys.callAnswerColor] = coerced.callAnswerColorArgb
+        preferences[Keys.callDeclineColor] = coerced.callDeclineColorArgb
+        preferences[Keys.downloadColor] = coerced.downloadColorArgb
+        preferences[Keys.navigationColor] = coerced.navigationColorArgb
+        preferences[Keys.disabledPackages] = coerced.disabledPackages
     }
 
     suspend fun setOffsetXDp(value: Int) = update { it.copy(offsetXDp = value) }
