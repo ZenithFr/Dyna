@@ -182,7 +182,13 @@ internal class IslandPillView(context: Context) : View(context) {
     private var heightProgress = 0f
     private var heightVelocity = 0f
     private var springActive = false
-    private var lastStepMs = 0L
+    /**
+     * Start of the previous frame on the shared animation clock, in [View.getDrawingTime] units
+     * (uptime ns). 0 means "no previous frame"; every spring start resets it.
+     */
+    private var lastFrameNs = 0L
+    /** The current frame's start time in uptime ms; every time-driven draw reads this one clock. */
+    private var frameNowMs = 0L
 
     /** Reused (pos, vel) pair so the spring does not allocate on every frame. */
     private val springOut = FloatArray(2)
@@ -368,7 +374,7 @@ internal class IslandPillView(context: Context) : View(context) {
         }
         updateSatelliteTarget()
         dormantSettling = true
-        lastStepMs = 0L
+        lastFrameNs = 0L
         requestMotionRate(true)
         removeCallbacks(settleWatchdog)
         postDelayed(settleWatchdog, MORPH_WATCHDOG_MS)
@@ -518,7 +524,7 @@ internal class IslandPillView(context: Context) : View(context) {
             val key = "${notification.key}|${notification.title}|${notification.text}"
             if (key != revealTextKey) {
                 revealTextKey = key
-                revealStartMs = SystemClock.elapsedRealtime()
+                revealStartMs = SystemClock.uptimeMillis()
                 revealAnimating = true
             }
         } else {
@@ -536,7 +542,7 @@ internal class IslandPillView(context: Context) : View(context) {
             previousClock.key == nextClock.key && previousClock.timeText != nextClock.timeText
         ) {
             clockRollFrom = previousClock.timeText
-            clockRollStartMs = SystemClock.elapsedRealtime()
+            clockRollStartMs = SystemClock.uptimeMillis()
             clockRollRunning = true
         }
 
@@ -557,7 +563,7 @@ internal class IslandPillView(context: Context) : View(context) {
             !springActive && framesReady
         ) {
             previousContent = content
-            swapStartMs = SystemClock.elapsedRealtime()
+            swapStartMs = SystemClock.uptimeMillis()
             swapAnimating = true
         } else if (newKey == null || oldKey != newKey) {
             previousContent = null
@@ -573,7 +579,7 @@ internal class IslandPillView(context: Context) : View(context) {
         if (nextSatelliteIcon != null && nextSatelliteIcon !== satelliteDrawable) {
             previousSatelliteDrawable = satelliteDrawable
             satelliteDrawable = nextSatelliteIcon
-            satelliteSwapStartMs = SystemClock.elapsedRealtime()
+            satelliteSwapStartMs = SystemClock.uptimeMillis()
             satelliteSwapAnimating = motionAllowed && previousSatelliteDrawable != null
         }
         updateSatelliteTarget()
@@ -595,7 +601,7 @@ internal class IslandPillView(context: Context) : View(context) {
             requestMotionRate(false)
         } else if (framesReady && !springActive && abs(progress - target) > 0.001f) {
             springActive = true
-            lastStepMs = 0L
+            lastFrameNs = 0L
             // Width leads, height follows: start both from where they currently sit.
             if (abs(widthProgress - target) < 0.001f) widthVelocity = 0f
             if (abs(heightProgress - target) < 0.001f) heightVelocity = 0f
@@ -628,7 +634,7 @@ internal class IslandPillView(context: Context) : View(context) {
             previousClock.key == nextClock.key && previousClock.timeText != nextClock.timeText
         ) {
             clockRollFrom = previousClock.timeText
-            clockRollStartMs = SystemClock.elapsedRealtime()
+            clockRollStartMs = SystemClock.uptimeMillis()
             clockRollRunning = true
         }
         content = newContent
@@ -722,8 +728,13 @@ internal class IslandPillView(context: Context) : View(context) {
         val heightPx = height.toFloat()
         if (widthPx <= 0f || heightPx <= 0f) return
 
-        val now = SystemClock.elapsedRealtime()
-        if (springActive || dormantSettling || satelliteActive) advanceMotion(now)
+        // One clock for the whole frame: the frame's own start time, which is what the vsync
+        // actually presented, instead of sampling mid-draw (that added sampling jitter to every
+        // spring). Falls back to uptime when the platform has not stamped a frame yet.
+        val nowNs = frameTimeNs()
+        val now = nowNs / 1_000_000L
+        frameNowMs = now
+        if (springActive || dormantSettling || satelliteActive) advanceMotion(nowNs)
         if (clockRollRunning &&
             (now - clockRollStartMs) >= CLOCK_ROLL_MS
         ) {
@@ -1162,7 +1173,7 @@ internal class IslandPillView(context: Context) : View(context) {
         }
         if (abs(satelliteProgress - target) > 0.001f || abs(satelliteVelocity) > 0.05f) {
             satelliteActive = true
-            lastStepMs = 0L
+            lastFrameNs = 0L
             requestMotionRate(true)
             removeCallbacks(settleWatchdog)
             postDelayed(settleWatchdog, MORPH_WATCHDOG_MS)
@@ -1257,25 +1268,36 @@ internal class IslandPillView(context: Context) : View(context) {
     // ---------------------------------------------------------------------------------------
 
     /**
+     * The frame's start time, in uptime nanoseconds. `getDrawingTime()` is the time the hierarchy
+     * started drawing this frame; it is set by the window's traversal, so it is valid for the
+     * accessibility-overlay window too. A 0 stamp (first frame / detached) uses uptime, which is
+     * the same base, so the clock stays continuous.
+     */
+    private fun frameTimeNs(): Long {
+        val drawingMs = drawingTime
+        return if (drawingMs > 0L) {
+            drawingMs * 1_000_000L
+        } else {
+            SystemClock.uptimeMillis() * 1_000_000L
+        }
+    }
+
+    /**
      * The expand/retract springs run at two different response times (width leads, height trails)
      * and the idle contraction runs a third; all three share one frame clock so they cannot drift.
      */
-    private fun advanceMotion(now: Long) {
+    private fun advanceMotion(nowNs: Long) {
         Trace.beginSection("island.motion")
         try {
-            advanceMotionLocked(now)
+            advanceMotionLocked(nowNs)
         } finally {
             Trace.endSection()
         }
     }
 
-    private fun advanceMotionLocked(now: Long) {
-        val dt = if (lastStepMs == 0L) {
-            1f / 120f
-        } else {
-            ((now - lastStepMs) / 1000f).coerceIn(0.003f, 0.032f)
-        }
-        lastStepMs = now
+    private fun advanceMotionLocked(nowNs: Long) {
+        val dt = IslandMotion.frameDelta(lastFrameNs, nowNs)
+        lastFrameNs = nowNs
 
         if (springActive) {
             val target = if (expanded) 1f else 0f
@@ -1450,7 +1472,7 @@ internal class IslandPillView(context: Context) : View(context) {
         baseline: Float,
         paint: TextPaint,
     ) {
-        val elapsed = SystemClock.elapsedRealtime() - revealStartMs
+        val elapsed = frameNowMs - revealStartMs
         if (!revealAnimating || elapsed >= IslandMotion.REVEAL_DURATION_MS) {
             canvas.drawText(text, 0, text.length, x, baseline, paint)
             return
@@ -1959,7 +1981,7 @@ internal class IslandPillView(context: Context) : View(context) {
         val width = paint.measureText(next)
         val left = cx - width / 2f
         val progress = if (clockRollRunning) {
-            ((SystemClock.elapsedRealtime() - clockRollStartMs) / CLOCK_ROLL_MS.toFloat())
+            ((frameNowMs - clockRollStartMs) / CLOCK_ROLL_MS.toFloat())
                 .coerceIn(0f, 1f)
         } else {
             1f
@@ -2394,7 +2416,7 @@ internal class IslandPillView(context: Context) : View(context) {
         val maxHeight = (heightPx * 0.44f).coerceAtMost(dp(22f))
         val minHeight = (heightPx * 0.16f).coerceAtMost(dp(8f))
         accentPaint.color = color
-        val phase = (SystemClock.elapsedRealtime() % 900L) / 900f * (2f * Math.PI).toFloat()
+        val phase = (frameNowMs % 900L) / 900f * (2f * Math.PI).toFloat()
 
         repeat(count) { index ->
             val factor = if (animating) {
@@ -2537,7 +2559,7 @@ internal class IslandPillView(context: Context) : View(context) {
                         listener?.onNotificationDismiss()
                     } else {
                         swipeSettleFrom = swept
-                        swipeSettleStartMs = SystemClock.elapsedRealtime()
+                        swipeSettleStartMs = SystemClock.uptimeMillis()
                         swipeSettling = true
                     }
                     invalidate()
@@ -2561,7 +2583,7 @@ internal class IslandPillView(context: Context) : View(context) {
                     swipeDragging = false
                     swipeCandidate = false
                     swipeSettleFrom = swipeOffsetPx
-                    swipeSettleStartMs = SystemClock.elapsedRealtime()
+                    swipeSettleStartMs = SystemClock.uptimeMillis()
                     swipeSettling = true
                 }
                 cancelTouch()

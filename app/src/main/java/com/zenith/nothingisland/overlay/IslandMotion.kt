@@ -28,6 +28,20 @@ internal object IslandMotion {
     const val SWAP_DURATION_MS = 160L
     const val REVEAL_DURATION_MS = 220f
 
+    /** Longest step the springs accept, so a frame after backgrounding cannot teleport the shell. */
+    const val MAX_FRAME_STEP_SECONDS = 0.25f
+
+    /**
+     * Wall-clock step between two frames, in seconds. The first frame (no previous stamp, or a
+     * non-advancing clock) contributes nothing: the old `1/120 s` seed advanced the shell one
+     * phantom frame before it had ever been drawn. Ordinary jitter is no longer clamped, because
+     * the closed form is exact and a clamp would slow the animation in wall-clock time.
+     */
+    fun frameDelta(prevNs: Long, nowNs: Long, maxSeconds: Float = MAX_FRAME_STEP_SECONDS): Float {
+        if (prevNs <= 0L || nowNs <= prevNs) return 0f
+        return ((nowNs - prevNs) / 1_000_000_000.0).toFloat().coerceIn(0f, maxSeconds)
+    }
+
     /** Writes position to out[0] and velocity to out[1]. All shell springs are underdamped. */
     fun stepSpring(
         position: Float,

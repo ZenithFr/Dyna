@@ -78,4 +78,85 @@ class IslandMotionTest {
         assertEquals(1f, IslandMotion.dormantWidthShare(1f), 0f)
         assertEquals(1f, IslandMotion.dormantHeightShare(1f), 0f)
     }
+
+    @Test
+    fun frameDeltaIsZeroOnTheFirstFrameAndNeverGoesBackwards() {
+        // No previous stamp: the shell starts at rest instead of advancing a phantom 1/120 s.
+        assertEquals(0f, IslandMotion.frameDelta(0L, 1_000_000_000L), 0f)
+        assertEquals(0f, IslandMotion.frameDelta(2_000_000_000L, 1_000_000_000L), 0f)
+        assertEquals(0f, IslandMotion.frameDelta(1_000_000_000L, 1_000_000_000L), 0f)
+    }
+
+    @Test
+    fun frameDeltaMeasuresWallClockTime() {
+        assertEquals(0.016f, IslandMotion.frameDelta(1_000_000_000L, 1_016_000_000L), 1e-7f)
+        assertEquals(0.120f, IslandMotion.frameDelta(1_000_000_000L, 1_120_000_000L), 1e-7f)
+        assertEquals(0.0083f, IslandMotion.frameDelta(1_000_000_000L, 1_008_300_000L), 1e-7f)
+    }
+
+    @Test
+    fun manySmallStepsMatchOneStepOfTheSameTotalTime() {
+        fun simulate(steps: Int, dt: Float): Float {
+            val out = FloatArray(2)
+            var position = 0f
+            var velocity = 0f
+            repeat(steps) {
+                IslandMotion.stepSpring(position, velocity, 1f, IslandMotion.WIDTH_OMEGA, IslandMotion.WIDTH_ZETA, dt, out)
+                position = out[0]
+                velocity = out[1]
+            }
+            return position
+        }
+        // 16 frames at 16 ms are the same 256 ms as one step; the closed form is exact either way.
+        assertEquals(simulate(1, 0.256f), simulate(16, 0.016f), 0.0001f)
+    }
+
+    @Test
+    fun aHitchStepsTheWallClockTimeNotTheOldClamp() {
+        val dt = IslandMotion.frameDelta(1_000_000_000L, 1_120_000_000L)
+        assertEquals(0.120f, dt, 1e-7f)
+
+        val out = FloatArray(2)
+        IslandMotion.stepSpring(0f, 0f, 1f, IslandMotion.WIDTH_OMEGA, IslandMotion.WIDTH_ZETA, dt, out)
+        val hitchPosition = out[0]
+        IslandMotion.stepSpring(0f, 0f, 1f, IslandMotion.WIDTH_OMEGA, IslandMotion.WIDTH_ZETA, 0.032f, out)
+        // The old 32 ms clamp discarded 88 ms of the hitch; this must land further along.
+        assertTrue(hitchPosition > out[0] + 0.05f)
+
+        val wallClock = FloatArray(2)
+        IslandMotion.stepSpring(0f, 0f, 1f, IslandMotion.WIDTH_OMEGA, IslandMotion.WIDTH_ZETA, 0.120f, wallClock)
+        assertEquals(wallClock[0], hitchPosition, 1e-6f)
+    }
+
+    @Test
+    fun aLongBackgroundGapIsCappedAndDoesNotTeleport() {
+        val dt = IslandMotion.frameDelta(1_000_000_000L, 6_000_000_000L)
+        assertEquals(IslandMotion.MAX_FRAME_STEP_SECONDS, dt, 0f)
+
+        val out = FloatArray(2)
+        IslandMotion.stepSpring(0f, 0f, 1f, IslandMotion.WIDTH_OMEGA, IslandMotion.WIDTH_ZETA, dt, out)
+        // Capped at 250 ms the spring is essentially settled, not flung past the target.
+        assertTrue(out[0] in 0.99f..1.01f)
+        assertTrue(abs(out[1]) < 0.2f)
+    }
+
+    @Test
+    fun reversingMidFlightKeepsMomentum() {
+        val out = FloatArray(2)
+        var position = 0f
+        var velocity = 0f
+        repeat(5) {
+            IslandMotion.stepSpring(position, velocity, 1f, IslandMotion.WIDTH_OMEGA, IslandMotion.WIDTH_ZETA, 1f / 60f, out)
+            position = out[0]
+            velocity = out[1]
+        }
+        assertTrue(velocity > 0f)
+
+        val carried = FloatArray(2)
+        val cold = FloatArray(2)
+        IslandMotion.stepSpring(position, velocity, 0f, IslandMotion.WIDTH_OMEGA, IslandMotion.WIDTH_ZETA, 1f / 120f, carried)
+        IslandMotion.stepSpring(position, 0f, 0f, IslandMotion.WIDTH_OMEGA, IslandMotion.WIDTH_ZETA, 1f / 120f, cold)
+        // A reversal keeps the outgoing velocity instead of restarting the spring from rest.
+        assertTrue(carried[1] > cold[1])
+    }
 }
