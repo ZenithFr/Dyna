@@ -16,6 +16,9 @@
     <!-- Only used by the BootReceiver, which stays disabled until a timer exists. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- The finished-timer alert vibrates directly when notifications are blocked. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- Needed on Android 11+ to list installed launcher apps for per-app notification filtering. -->
     <queries>
         <intent>

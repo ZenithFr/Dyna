@@ -83,9 +83,13 @@ window — no root, no `SYSTEM_ALERT_WINDOW` grant, no cloud, no telemetry.
   Tap to expand for circular pause/resume + cancel controls leading and a large orange `mm:ss` / `h:mm:ss`
   trailing, below the lens. Time is
   derived from `SystemClock.elapsedRealtime`, so ticks never drift. While the panel is off/dozing
-  the 1 Hz UI ticker is replaced by a single completion wake at the end timestamp; a finished timer shows
-  `TIME'S UP` / `00:00` for 4 s before clearing. Notifications and charging still layer above it
-  and hand it back when they expire.
+  the 1 Hz UI ticker stops and completion is owned by an `AlarmManager` wake-up at the end timestamp; a finished timer shows
+  `TIME'S UP` / `00:00` for 4 s before clearing. When time runs out, it fires with a high-importance notification,
+  default vibration, and optional sound, and it reliably triggers even with the screen off, after a reboot, or if
+  the app process is killed. Toggles live under **Settings > Sources & timer** ("Vibrate when the timer ends"
+  and "Play a sound when the timer ends"), alongside an exact-alarm status row. If system restrictions block
+  exact alarms, alerts may arrive a few minutes late, with the settings row linking directly to the grant.
+  Notifications and charging still layer above it and hand it back when they expire.
 - **Detached app icon**: a persistent live activity — music, timer, maps or downloads — keeps the
   island compact and moves the owning app's icon into its own circle a gap to the right. Notification
   and call alerts use the same bubble under their own switch (**App icon in detached bubble**): while

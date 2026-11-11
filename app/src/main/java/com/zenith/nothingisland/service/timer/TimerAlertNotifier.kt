@@ -28,8 +28,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  * notification (the sanctioned way to vibrate or sound with the screen off), and vibrates directly
  * as a fallback when notifications are blocked.
  *
- * Channel settings mirror the two user switches: vibration (default on) and sound (default off, so a
- * finished timer cannot surprise a meeting).
+ * The channel is created once (Android treats sound/vibration on an existing channel as immutable)
+ * and the two user switches are applied per notification: sound off means a silent notification
+ * plus an app-driven vibration, so a finished timer can be felt without surprising a meeting.
  */
 object TimerAlertNotifier {
 
@@ -43,7 +44,7 @@ object TimerAlertNotifier {
         val settings = readSettings(appContext)
         val manager = appContext.getSystemService(NotificationManager::class.java)
 
-        runCatching { ensureChannel(appContext, manager, settings) }
+        runCatching { ensureChannel(manager) }
             .onFailure { Log.w(TAG, "Unable to create the timer channel", it) }
 
         val posted = runCatching {
@@ -56,10 +57,12 @@ object TimerAlertNotifier {
         }.onFailure { Log.w(TAG, "Unable to post the timer notification", it) }
             .getOrDefault(false)
 
-        // Notifications can be off (permission denied, channel blocked, DND). The alert must still
-        // be perceivable, so fall back to a direct vibration — but never vibrate twice when the
-        // notification itself already did.
-        if (!posted) vibrate(appContext, settings.timerAlertVibrate)
+        // Two independent switches, one channel: the channel is created once (Android ignores
+        // later sound/vibration changes anyway), and the notification is made silent when the user
+        // asked for no sound. Vibration then comes from the app, so it works with sound off.
+        if (!posted || !settings.timerAlertSound) {
+            vibrate(appContext, settings.timerAlertVibrate)
+        }
     }
 
     /** Removes the alert when the user dismisses or restarts the timer. */
@@ -70,37 +73,24 @@ object TimerAlertNotifier {
         }
     }
 
-    private fun ensureChannel(
-        context: Context,
-        manager: NotificationManager?,
-        settings: IslandSettings,
-    ) {
+    /**
+     * Created once, never recreated: Android treats sound/vibration on an existing channel as
+     * immutable and silently keeps the old values, so "update the channel" would be a lie. The
+     * per-alert switches are applied on the notification instead ([buildNotification]).
+     */
+    private fun ensureChannel(manager: NotificationManager?) {
         if (manager == null) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val existing = manager.getNotificationChannel(CHANNEL_ID)
-        if (existing != null) {
-            // The user may have toggled the switches since the channel was created. Android
-            // ignores sound/vibration changes after creation, so only recreate on a real change.
-            if (existing.shouldVibrate() != settings.timerAlertVibrate) {
-                manager.deleteNotificationChannel(CHANNEL_ID)
-            } else {
-                return
-            }
-        }
+        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Timers",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
             description = "Fires when a timer started from the island reaches zero."
-            enableVibration(settings.timerAlertVibrate)
+            enableVibration(true)
             vibrationPattern = VIBRATION_PATTERN
             setSound(
-                if (settings.timerAlertSound) {
-                    android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
-                } else {
-                    null
-                },
+                android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM),
                 android.media.AudioAttributes.Builder()
                     .setUsage(android.media.AudioAttributes.USAGE_ALARM)
                     .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -127,11 +117,8 @@ object TimerAlertNotifier {
         .setOnlyAlertOnce(false)
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         .setContentIntent(openAppIntent(context))
-        .apply {
-            if (settings.timerAlertVibrate) {
-                setVibrate(VIBRATION_PATTERN)
-            }
-        }
+        // Sound off means silent: no channel sound, no channel vibration. The app vibrates instead.
+        .setSilent(!settings.timerAlertSound)
         .build()
 
     private fun openAppIntent(context: Context): PendingIntent {

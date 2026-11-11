@@ -266,7 +266,8 @@ object TimerModule {
     /**
      * Keeps the finished ("00:00") card visible for [FINISHED_HOLD_MS] once it is actually the
      * visible event, then clears it. The alert itself has already fired by now; this is only the
-     * visual.
+     * visual, so the system notification is deliberately **not** cancelled here — the user may not
+     * have looked at the phone yet.
      */
     private fun scheduleFinishedClear() {
         clearJob?.cancel()
@@ -277,8 +278,17 @@ object TimerModule {
                 IslandStateHolder.state.first { it?.source == IslandSource.Timer }
             }
             delay(FINISHED_HOLD_MS)
-            stop()
+            clearFinishedCard()
         }
+    }
+
+    /** Ends the finished card without touching the notification that told the user about it. */
+    private fun clearFinishedCard() {
+        cancelJobs()
+        core?.stop()
+        _state.value = null
+        IslandStateHolder.clearTimer()
+        updateBootReceiver(enabled = false)
     }
 
     private fun updateBootReceiver(enabled: Boolean) {

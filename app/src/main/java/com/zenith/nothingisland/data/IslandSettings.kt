@@ -1,5 +1,6 @@
 package com.zenith.nothingisland.data
 
+import android.annotation.SuppressLint
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -392,6 +393,8 @@ class IslandSettingsRepository private constructor(private val context: Context)
     suspend fun resetToDefaults() = update { IslandSettings() }
 
     companion object {
+        // Application context only: holding it for the process lifetime is intended.
+        @SuppressLint("StaticFieldLeak")
         @Volatile
         private var instance: IslandSettingsRepository? = null
 

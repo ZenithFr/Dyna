@@ -647,6 +647,7 @@ internal class IslandPillView(context: Context) : View(context) {
     // ---------------------------------------------------------------------------------------
 
     override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
         // Trace sections are free when no trace is running (Unit 1, docs/perf/PERF_BUDGET.md).
         Trace.beginSection("island.onDraw")
         try {
@@ -657,7 +658,6 @@ internal class IslandPillView(context: Context) : View(context) {
     }
 
     private fun drawFrame(canvas: Canvas) {
-        super.onDraw(canvas)
         if (!framesReady) return
         val widthPx = width.toFloat()
         val heightPx = height.toFloat()

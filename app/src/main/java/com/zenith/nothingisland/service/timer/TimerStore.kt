@@ -1,5 +1,6 @@
 package com.zenith.nothingisland.service.timer
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
 
@@ -15,6 +16,8 @@ class TimerStore(context: Context) : TimerStorePort {
     private val prefs = context.applicationContext
         .getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
 
+    // commit() is deliberate: the process may be killed right after an alarm is armed.
+    @SuppressLint("ApplySharedPref")
     override fun save(record: TimerRecord) {
         prefs.edit()
             .putString(KEY_LABEL, record.label)
@@ -41,6 +44,7 @@ class TimerStore(context: Context) : TimerStorePort {
         return record
     }
 
+    @SuppressLint("ApplySharedPref")
     override fun clear() {
         prefs.edit().clear().commit()
     }

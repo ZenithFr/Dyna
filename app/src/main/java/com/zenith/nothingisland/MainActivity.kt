@@ -1,5 +1,6 @@
 package com.zenith.nothingisland
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.RectF
 import android.net.Uri
@@ -232,6 +233,7 @@ class MainActivity : ComponentActivity() {
         startActivitySafely(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
     }
 
+    @SuppressLint("BatteryLife") // The user taps this deliberately; the dialog explains the trade-off.
     private fun requestIgnoreBatteryOptimizations() {
         startActivitySafely(
             Intent(
