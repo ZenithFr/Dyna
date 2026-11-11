@@ -87,6 +87,7 @@ Then: keep filling `docs/perf/PERF_BUDGET.md` (P4–P8 still unmeasured) and wor
 | U4 tick-only render | landed (`29876d0`), 5 tests | not re-checked since; the perf doc's P4 row needs it |
 | U7 debounced settings write | landed (`659db48`), 6 tests, `NonCancellable` commit on pause | slider drag not measured on device |
 | U3 media progress / paused card / resume | landed (`db13949`), 6 tests, lint clean | **pending** — needs the phone awake: expand a playing card and confirm one repaint per second, pause and confirm the card survives 30 s then clears, resume from it |
+| U5 frame-clock motion | landed (`0d94cb7`), 6 tests, lint clean | **pending** — inject an 80 ms stall during an expand and confirm the settle time moves by less than one frame |
 
 U3's one deliberate gap: a live stream (`durationMs == 0`) schedules no tick because
 `estimatePositionMs` does not extrapolate without a duration, so the elapsed label is static anyway.
