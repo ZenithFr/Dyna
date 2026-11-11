@@ -120,6 +120,9 @@ data class IslandSettings(
     val ambientFrameRateHz: Int = DEFAULT_AMBIENT_FRAME_RATE_HZ,
     val motionScalePercent: Int = DEFAULT_MOTION_SCALE_PERCENT,
 
+    // Media. A paused card stays resumable for this long; 0 clears it as soon as playback stops.
+    val mediaKeepPausedSec: Int = DEFAULT_MEDIA_KEEP_PAUSED_SEC,
+
     // Per-source accents. Media keeps its artwork-sampled accent.
     val timerColorArgb: Int = DEFAULT_TIMER_COLOR_ARGB,
     val chargingColorArgb: Int = DEFAULT_CHARGING_COLOR_ARGB,
@@ -166,6 +169,7 @@ data class IslandSettings(
         compactEdgePaddingDp = compactEdgePaddingDp.coerceIn(COMPACT_EDGE_PADDING_RANGE),
         ambientFrameRateHz = ambientFrameRateHz.coerceIn(AMBIENT_FRAME_RATE_RANGE),
         motionScalePercent = motionScalePercent.coerceIn(MOTION_SCALE_RANGE),
+        mediaKeepPausedSec = mediaKeepPausedSec.coerceIn(MEDIA_KEEP_PAUSED_RANGE),
         shellOpacityPercent = shellOpacityPercent.coerceIn(SHELL_OPACITY_RANGE),
         disabledPackages = disabledPackages.toSet(),
     )
@@ -199,6 +203,7 @@ data class IslandSettings(
         val AMBIENT_FRAME_RATE_RANGE = 30..120
         val MOTION_SCALE_RANGE = 50..150
         val SHELL_OPACITY_RANGE = 40..100
+        val MEDIA_KEEP_PAUSED_RANGE = 0..300
 
         const val DEFAULT_OFFSET_X_DP = 0
         const val DEFAULT_OFFSET_Y_DP = 6
@@ -258,6 +263,7 @@ data class IslandSettings(
         const val DEFAULT_AMBIENT_ANIMATIONS_ENABLED = false
         const val DEFAULT_AMBIENT_FRAME_RATE_HZ = 30
         const val DEFAULT_MOTION_SCALE_PERCENT = 100
+        const val DEFAULT_MEDIA_KEEP_PAUSED_SEC = 30
         const val DEFAULT_TIMER_COLOR_ARGB = 0xFFFF9F0A.toInt()
         const val DEFAULT_CHARGING_COLOR_ARGB = 0xFF30D158.toInt()
         const val DEFAULT_BATTERY_LOW_COLOR_ARGB = 0xFFFF453A.toInt()
@@ -392,6 +398,7 @@ class IslandSettingsRepository private constructor(private val context: Context)
         preferences[Keys.ambientAnimationsEnabled] = coerced.ambientAnimationsEnabled
         preferences[Keys.ambientFrameRate] = coerced.ambientFrameRateHz
         preferences[Keys.motionScale] = coerced.motionScalePercent
+        preferences[Keys.mediaKeepPaused] = coerced.mediaKeepPausedSec
         preferences[Keys.timerColor] = coerced.timerColorArgb
         preferences[Keys.chargingColor] = coerced.chargingColorArgb
         preferences[Keys.batteryLowColor] = coerced.batteryLowColorArgb
@@ -514,6 +521,7 @@ private object Keys {
     val ambientAnimationsEnabled = booleanPreferencesKey("ambient_animations_enabled")
     val ambientFrameRate = intPreferencesKey("ambient_frame_rate_hz")
     val motionScale = intPreferencesKey("motion_scale_percent")
+    val mediaKeepPaused = intPreferencesKey("media_keep_paused_sec")
     val timerColor = intPreferencesKey("timer_color_argb")
     val chargingColor = intPreferencesKey("charging_color_argb")
     val batteryLowColor = intPreferencesKey("battery_low_color_argb")
@@ -596,6 +604,7 @@ private fun Preferences.toIslandSettings(): IslandSettings = IslandSettings(
     ambientAnimationsEnabled = this[Keys.ambientAnimationsEnabled] ?: IslandSettings.DEFAULT_AMBIENT_ANIMATIONS_ENABLED,
     ambientFrameRateHz = this[Keys.ambientFrameRate] ?: IslandSettings.DEFAULT_AMBIENT_FRAME_RATE_HZ,
     motionScalePercent = this[Keys.motionScale] ?: IslandSettings.DEFAULT_MOTION_SCALE_PERCENT,
+    mediaKeepPausedSec = this[Keys.mediaKeepPaused] ?: IslandSettings.DEFAULT_MEDIA_KEEP_PAUSED_SEC,
     timerColorArgb = this[Keys.timerColor] ?: IslandSettings.DEFAULT_TIMER_COLOR_ARGB,
     chargingColorArgb = this[Keys.chargingColor] ?: IslandSettings.DEFAULT_CHARGING_COLOR_ARGB,
     batteryLowColorArgb = this[Keys.batteryLowColor] ?: IslandSettings.DEFAULT_BATTERY_LOW_COLOR_ARGB,

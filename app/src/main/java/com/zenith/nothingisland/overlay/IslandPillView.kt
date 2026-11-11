@@ -13,6 +13,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.PowerManager
 import android.os.SystemClock
 import android.os.Trace
 import android.text.TextPaint
@@ -211,6 +212,15 @@ internal class IslandPillView(context: Context) : View(context) {
      */
     private val notifyMorphSettled = Runnable { onMorphSettled?.invoke() }
 
+    /**
+     * The expanded progress row only needs a repaint when the clock second rolls over, so this
+     * single self-rescheduling runnable replaces what would otherwise be a frame loop.
+     */
+    private val secondTick = Runnable {
+        invalidate()
+        scheduleSecondTick()
+    }
+
     /** Previous activity, crossfaded out when the island switches what it is showing. */
     private var previousContent: IslandContent? = null
     private var swapStartMs = 0L
@@ -404,6 +414,7 @@ internal class IslandPillView(context: Context) : View(context) {
     fun onHidden() {
         removeCallbacks(settleWatchdog)
         removeCallbacks(notifyMorphSettled)
+        removeCallbacks(secondTick)
         cancelTouch()
         framesReady = false
         springActive = false
@@ -593,6 +604,7 @@ internal class IslandPillView(context: Context) : View(context) {
             postDelayed(settleWatchdog, MORPH_WATCHDOG_MS)
         }
         invalidate()
+        scheduleSecondTick()
     }
 
     /**
@@ -601,7 +613,11 @@ internal class IslandPillView(context: Context) : View(context) {
      * announcing a running timer every second would be hostile; structural changes still use render().
      */
     fun applyTick(event: IslandEvent?) {
-        val newContent = event?.content ?: return
+        val newContent = event?.content
+        if (event == null || newContent == null) {
+            scheduleSecondTick()
+            return
+        }
         motionAllowed = customization.motionEnabled && ValueAnimator.areAnimatorsEnabled()
         // Same digit roll as render(): keep the outgoing text so the row rolls instead of hard-cutting.
         val previousClock = content as? IslandContent.ClockActivity
@@ -617,6 +633,25 @@ internal class IslandPillView(context: Context) : View(context) {
         }
         content = newContent
         invalidate()
+        scheduleSecondTick()
+    }
+
+    /**
+     * Arms one repaint for the next whole second, only while an expanded playing card is actually
+     * on screen. A paused card is frozen, so it schedules nothing and costs nothing.
+     */
+    private fun scheduleSecondTick() {
+        removeCallbacks(secondTick)
+        val media = content as? IslandContent.Media ?: return
+        if (!expanded || !isAttachedToWindow || !isShown) return
+        if (!media.isPlaying || media.isPaused) return
+        // No duration means a live stream: estimatePositionMs is frozen, so a tick would repaint
+        // the same frame forever.
+        if (media.durationMs <= 0L) return
+        val power = context.getSystemService(PowerManager::class.java) ?: return
+        if (!power.isInteractive) return
+        val position = media.estimatePositionMs(SystemClock.elapsedRealtime())
+        postDelayed(secondTick, 1_000L - (position % 1_000L))
     }
 
     /**
@@ -2551,9 +2586,16 @@ internal class IslandPillView(context: Context) : View(context) {
         runCatching { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) }
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        // render() usually runs before the window exists; arm the per-second repaint now that it does.
+        scheduleSecondTick()
+    }
+
     override fun onDetachedFromWindow() {
         removeCallbacks(settleWatchdog)
         removeCallbacks(notifyMorphSettled)
+        removeCallbacks(secondTick)
         cancelTouch()
         requestMotionRate(false)
         super.onDetachedFromWindow()

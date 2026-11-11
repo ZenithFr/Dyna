@@ -110,6 +110,7 @@ class IslandService : AccessibilityService(), IslandInteraction {
                     powerSaveMs = snapshot.powerSaveAlertDurationSec * 1000L,
                 )
                 chargingSource.updateSettings(snapshot)
+                mediaSource.updateKeepPausedSec(snapshot.mediaKeepPausedSec)
                 if (overlay?.isScreenActive != false) {
                     mediaSource.updateEnabled(snapshot.mediaEnabled)
                 } else {

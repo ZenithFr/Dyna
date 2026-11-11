@@ -330,6 +330,20 @@ internal fun MotionPerformancePanel(settings: IslandSettings, onSettingsChange: 
             ) {
                 onSettingsChange { s -> s.copy(ambientFrameRateHz = it) }
             }
+            CalibrationSlider(
+                "Keep paused card",
+                settings.mediaKeepPausedSec,
+                IslandSettings.MEDIA_KEEP_PAUSED_RANGE,
+                unit = "s",
+            ) {
+                onSettingsChange { s -> s.copy(mediaKeepPausedSec = it) }
+            }
+            Text(
+                "0 clears the media card as soon as playback stops. Above 0 a paused card stays up for that long, so play can be resumed straight from the island.",
+                style = MaterialTheme.typography.bodySmall,
+                color = NothingMuted,
+                modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+            )
             CalibrationSlider("Motion speed", settings.motionScalePercent, IslandSettings.MOTION_SCALE_RANGE, unit = "%") {
                 onSettingsChange { s -> s.copy(motionScalePercent = it) }
             }

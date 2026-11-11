@@ -55,6 +55,8 @@ sealed interface IslandContent {
         val artist: String,
         val albumArt: Bitmap?,
         val isPlaying: Boolean,
+        /** Paused, but kept on screen for the keep-paused window so playback can resume from it. */
+        val isPaused: Boolean = false,
         val positionMs: Long,
         val durationMs: Long,
         val positionUpdatedAtElapsedMs: Long,

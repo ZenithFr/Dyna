@@ -16,6 +16,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
+import com.zenith.nothingisland.data.IslandSettings
 import com.zenith.nothingisland.service.IslandContent
 import com.zenith.nothingisland.service.IslandStateHolder
 import com.zenith.nothingisland.service.notification.IslandNotificationListener
@@ -41,6 +42,9 @@ class MediaSource(private val context: Context) {
     private var started = false
     private var playing = false
     private var enabled = true
+    /** When the current pause was first seen; the keep-paused hold is measured from here. */
+    private var pausedSinceElapsedMs: Long? = null
+    private var keepPausedSec = IslandSettings.DEFAULT_MEDIA_KEEP_PAUSED_SEC
     // Identity only: do not strongly retain the session's full-size artwork. The overlay keeps the
     // bounded thumbnail, and a GC'd original simply causes one rescale on the next metadata update.
     private var artSource: WeakReference<Bitmap>? = null
@@ -62,7 +66,7 @@ class MediaSource(private val context: Context) {
         override fun onMetadataChanged(metadata: MediaMetadataCompat?) = publish()
         override fun onSessionDestroyed() {
             detach()
-            IslandStateHolder.clearMedia()
+            clearSession()
             refresh()
         }
     }
@@ -71,6 +75,11 @@ class MediaSource(private val context: Context) {
         if (enabled == value) return
         enabled = value
         if (!value) stop() else start()
+    }
+
+    /** Pushed by the service on every settings emission; no polling of the repository here. */
+    fun updateKeepPausedSec(seconds: Int) {
+        keepPausedSec = seconds.coerceIn(IslandSettings.MEDIA_KEEP_PAUSED_RANGE)
     }
 
     /** Safe to call repeatedly; no-ops while notification access is missing. */
@@ -125,6 +134,7 @@ class MediaSource(private val context: Context) {
         }
         started = false
         detach()
+        pausedSinceElapsedMs = null
         playing = false
         clearArtCache()
         iconPackage = null
@@ -158,9 +168,7 @@ class MediaSource(private val context: Context) {
             ?.firstOrNull()
         if (chosen == null) {
             detach()
-            playing = false
-            clearArtCache()
-            IslandStateHolder.clearMedia()
+            clearSession()
             return
         }
         val currentSession = controller?.sessionToken?.token
@@ -175,9 +183,7 @@ class MediaSource(private val context: Context) {
             .onFailure { Log.w(TAG, "Unable to wrap media controller", it) }
             .getOrNull()
         if (compat == null) {
-            playing = false
-            clearArtCache()
-            IslandStateHolder.clearMedia()
+            clearSession()
             return
         }
         controller = compat
@@ -185,7 +191,7 @@ class MediaSource(private val context: Context) {
             .onFailure {
                 Log.w(TAG, "Unable to register media callback", it)
                 detach()
-                IslandStateHolder.clearMedia()
+                clearSession()
             }
         if (controller != null) publish()
     }
@@ -199,55 +205,83 @@ class MediaSource(private val context: Context) {
         val session = controller ?: return
         val metadata = runCatching { session.metadata }.getOrNull()
         val playback = runCatching { session.playbackState }.getOrNull()
+        val now = SystemClock.elapsedRealtime()
         if (metadata == null) {
-            playing = false
-            clearArtCache()
-            IslandStateHolder.clearMedia()
+            clearSession()
             return
         }
+        when (val decision = MediaPublishPolicy.decide(
+            state = (playback?.state ?: PlaybackStateCompat.STATE_NONE).toPublishState(),
+            hasMetadata = true,
+            keepPausedMs = keepPausedSec * 1000L,
+            nowElapsedMs = now,
+            pausedSinceElapsedMs = pausedSinceElapsedMs,
+        )) {
+            MediaPublish.Playing -> {
+                playing = true
+                pausedSinceElapsedMs = null
+                IslandStateHolder.postMedia(card(metadata, playback, now, session.packageName))
+            }
 
-        val state = playback?.state ?: PlaybackStateCompat.STATE_NONE
-        val active = state.isPlayingState()
-        playing = state == PlaybackStateCompat.STATE_PLAYING
-        if (!active) {
-            // Paused/stopped sessions fall back to whatever else the island has to show.
-            clearArtCache()
-            IslandStateHolder.clearMedia()
-            return
+            is MediaPublish.Paused -> {
+                // Keep art and controls so the card is a resume target, not a tombstone.
+                playing = false
+                pausedSinceElapsedMs = pausedSinceElapsedMs ?: now
+                IslandStateHolder.postMedia(
+                    card(metadata, playback, now, session.packageName)
+                        .copy(isPlaying = false, isPaused = true),
+                    pausedUntilElapsedMs = decision.untilElapsedMs,
+                )
+            }
+
+            MediaPublish.Clear -> clearSession()
         }
+    }
 
+    /** Stopped, destroyed or metadata-less sessions fall back to whatever else the island has. */
+    private fun clearSession() {
+        playing = false
+        pausedSinceElapsedMs = null
+        clearArtCache()
+        IslandStateHolder.clearMedia()
+    }
+
+    /** One metadata/state snapshot; the caller decides whether it shows as playing or paused. */
+    private fun card(
+        metadata: MediaMetadataCompat,
+        playback: PlaybackStateCompat?,
+        now: Long,
+        packageName: String?,
+    ): IslandContent.Media {
         val duration = metadata.getLong(MediaMetadataCompat.METADATA_KEY_DURATION)
             .takeIf { it > 0L }
             ?: 0L
         val actions = playback?.actions ?: 0L
         val art = albumArt(metadata)
-        val now = SystemClock.elapsedRealtime()
         val positionStamp = playback?.lastPositionUpdateTime
             ?.takeIf { it > 0L && it <= now }
             ?: now
 
-        IslandStateHolder.postMedia(
-            IslandContent.Media(
-                title = metadata.text(MediaMetadataCompat.METADATA_KEY_TITLE)
-                    ?: metadata.description?.title?.toString()
-                    ?: metadata.text(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE)
-                    ?: "Unknown track",
-                artist = metadata.text(MediaMetadataCompat.METADATA_KEY_ARTIST)
-                    ?: metadata.text(MediaMetadataCompat.METADATA_KEY_ALBUM)
-                    ?: metadata.description?.subtitle?.toString()
-                    ?: "",
-                albumArt = art,
-                isPlaying = playing,
-                positionMs = (playback?.position ?: 0L).coerceAtLeast(0L),
-                durationMs = duration,
-                positionUpdatedAtElapsedMs = positionStamp,
-                speed = playback?.playbackSpeed?.takeIf { it.isFinite() && it > 0f } ?: 1f,
-                canSeekPrevious = (actions and PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS) != 0L,
-                canPlayPause = (actions and (PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE)) != 0L,
-                canSeekNext = (actions and PlaybackStateCompat.ACTION_SKIP_TO_NEXT) != 0L,
-                accentColor = artAccent,
-                appIcon = appIcon(session.packageName),
-            ),
+        return IslandContent.Media(
+            title = metadata.text(MediaMetadataCompat.METADATA_KEY_TITLE)
+                ?: metadata.description?.title?.toString()
+                ?: metadata.text(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE)
+                ?: "Unknown track",
+            artist = metadata.text(MediaMetadataCompat.METADATA_KEY_ARTIST)
+                ?: metadata.text(MediaMetadataCompat.METADATA_KEY_ALBUM)
+                ?: metadata.description?.subtitle?.toString()
+                ?: "",
+            albumArt = art,
+            isPlaying = true,
+            positionMs = (playback?.position ?: 0L).coerceAtLeast(0L),
+            durationMs = duration,
+            positionUpdatedAtElapsedMs = positionStamp,
+            speed = playback?.playbackSpeed?.takeIf { it.isFinite() && it > 0f } ?: 1f,
+            canSeekPrevious = (actions and PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS) != 0L,
+            canPlayPause = (actions and (PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE)) != 0L,
+            canSeekNext = (actions and PlaybackStateCompat.ACTION_SKIP_TO_NEXT) != 0L,
+            accentColor = artAccent,
+            appIcon = appIcon(packageName),
         )
     }
 
@@ -348,6 +382,15 @@ class MediaSource(private val context: Context) {
         -> true
 
         else -> false
+    }
+
+    /** Only these cases matter; a paused session holds the card, everything else does not. */
+    private fun Int.toPublishState(): MediaPlaybackState = when {
+        // Buffering, connecting and the skip states keep the card up exactly as they did before
+        // this policy existed: the session is still the thing the island is showing.
+        isPlayingState() -> MediaPlaybackState.PLAYING
+        this == PlaybackStateCompat.STATE_PAUSED -> MediaPlaybackState.PAUSED
+        else -> MediaPlaybackState.OTHER
     }
 
     private fun MediaMetadataCompat.text(key: String): String? =

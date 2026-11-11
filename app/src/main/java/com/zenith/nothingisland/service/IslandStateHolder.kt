@@ -1,5 +1,6 @@
 package com.zenith.nothingisland.service
 
+import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -44,6 +45,7 @@ object IslandStateHolder {
     private var chargingJob: Job? = null
     private var batteryLowJob: Job? = null
     private var powerSaveJob: Job? = null
+    private var mediaExpiryJob: Job? = null
     private var notificationGeneration = 0
     private var chargingGeneration = 0
     private var batteryLowGeneration = 0
@@ -87,13 +89,18 @@ object IslandStateHolder {
     }
 
     @Synchronized
-    fun postMedia(content: IslandContent.Media) {
+    fun postMedia(content: IslandContent.Media, pausedUntilElapsedMs: Long? = null) {
+        mediaExpiryJob?.cancel()
+        mediaExpiryJob = null
         media = IslandEvent(IslandSource.Media, content, expanded = media?.expanded == true)
         publishLocked()
+        if (pausedUntilElapsedMs != null) armMediaExpiry(content, pausedUntilElapsedMs)
     }
 
     @Synchronized
     fun clearMedia() {
+        mediaExpiryJob?.cancel()
+        mediaExpiryJob = null
         if (media == null) return
         media = null
         publishLocked()
@@ -279,6 +286,8 @@ object IslandStateHolder {
     fun clearAll() {
         clearTransient()
         notificationAlerts.clear()
+        mediaExpiryJob?.cancel()
+        mediaExpiryJob = null
         call = null
         timer = null
         clock = null
@@ -466,6 +475,22 @@ object IslandStateHolder {
             synchronized(this@IslandStateHolder) {
                 if (powerSaveGeneration != generation || powerSave == null) return@synchronized
                 powerSave = null
+                publishLocked()
+            }
+        }
+    }
+
+    /**
+     * A paused card retracts on its own when the hold runs out. The identity check keeps a late
+     * deadline from clearing a card that was posted (or replaced) after this one.
+     */
+    private fun armMediaExpiry(content: IslandContent.Media, deadlineElapsedMs: Long) {
+        mediaExpiryJob = scope.launch {
+            delay((deadlineElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+            synchronized(this@IslandStateHolder) {
+                val shown = media ?: return@synchronized
+                if (shown.content !== content) return@synchronized
+                media = null
                 publishLocked()
             }
         }
